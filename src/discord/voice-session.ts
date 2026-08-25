@@ -53,7 +53,7 @@ export class DiscordVoiceSession {
     if (userId === this.botUserId || this.active.has(userId)) return;
     const user = this.guild.members.cache.get(userId)?.displayName ?? "unknown";
     const stream = this.connection.receiver.subscribe(userId, {
-      end: { behavior: EndBehaviorType.AfterInactivity, duration: 900 },
+      end: { behavior: EndBehaviorType.AfterInactivity, duration: 400 },
     });
     const decoder = new OpusEncoder(48_000, 2);
     const resampler = new LinearResampler(48_000, SAMPLE_RATE);
