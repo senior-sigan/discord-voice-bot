@@ -16,6 +16,7 @@ import {
 import { HistoryStore, searchHistory } from "./agent/history.js";
 import { MemoryStore } from "./agent/memory.js";
 import { AgentRuntime } from "./agent/runtime.js";
+import { SkillStore } from "./agent/skills.js";
 import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/transcript.js";
 import { floatMonoToStereoPcm, pcm16MonoWavToFloat, stereoPcmToMono } from "./audio.js";
 import { formatMessageTime } from "./common.js";
@@ -26,6 +27,7 @@ import { currentDateTimeTool } from "./tools/datetime.js";
 import { createMemeSearchTool } from "./tools/memes.js";
 import { createRememberTool, createSearchMemoryTool } from "./tools/memory.js";
 import { createRecallHistoryTool } from "./tools/recall.js";
+import { createSkillTools } from "./tools/skills.js";
 import { isSafePublicUrl } from "./tools/web.js";
 
 test("meme explanation parser normalizes valid structured output", () => {
@@ -149,6 +151,8 @@ test("Pi agent executes a tool and continues to the final answer", async () => {
   const directory = mkdtempSync(join(tmpdir(), "voice-agent-pi-"));
   try {
     const history = new HistoryStore(join(directory, "history.jsonl"));
+    const skills = new SkillStore(join(directory, "skills"));
+    await skills.load();
     const faux = fauxProvider();
     const models = createModels();
     models.setProvider(faux.provider);
@@ -159,12 +163,43 @@ test("Pi agent executes a tool and continues to the final answer", async () => {
       ),
       fauxAssistantMessage("Готово."),
     ]);
-    const runtime = new AgentRuntime(models, faux.getModel(), [currentDateTimeTool], history);
+    const runtime = new AgentRuntime(models, faux.getModel(), [currentDateTimeTool], history, skills);
     const calls: string[] = [];
 
     assert.equal(await runtime.complete("[10:00:00] Илья: Олег, который час?", (name) => calls.push(name)), "Готово.");
     assert.deepEqual(calls, ["get_current_datetime"]);
     assert.equal(history.entries.at(-1)?.tool, "get_current_datetime");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("skills persist, appear in the catalog and load on demand", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-skills-"));
+  try {
+    const store = new SkillStore(join(directory, "skills"));
+    await store.load();
+    const [view, create] = createSkillTools(store);
+    assert.ok(view && create);
+
+    await create.execute("create-skill", {
+      name: "tea-brewing",
+      description: "Готовь чай по повторяемой процедуре.",
+      instructions: "# Чай\n\n1. Нагрей воду.\n2. Завари листья.",
+    });
+
+    assert.match(store.catalogPrompt(), /tea-brewing/u);
+    const loaded = await view.execute("view-skill", { name: "tea-brewing" });
+    assert.match(loaded.content[0]?.type === "text" ? loaded.content[0].text : "", /Нагрей воду/u);
+    assert.match(readFileSync(join(directory, "skills", "tea-brewing", "SKILL.md"), "utf8"), /name: "tea-brewing"/u);
+    await assert.rejects(store.create("../bad", "Traversal", "Не должен сохраниться"), /Skill name/u);
+    await assert.rejects(
+      create.execute("duplicate-skill", {
+        name: "tea-brewing",
+        description: "Дубликат",
+        instructions: "Не должен сохраниться",
+      }),
+    );
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

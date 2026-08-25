@@ -7,6 +7,7 @@ import { contentText } from "@earendil-works/pi-ai";
 import { errorMessage, log } from "../common.js";
 import type { HistoryStore } from "./history.js";
 import { SYSTEM_PROMPT, TOOL_ANNOUNCEMENT_PROMPT } from "./prompts.js";
+import type { SkillStore } from "./skills.js";
 
 export type ToolCallListener = (name: string, args: string, announcement: string | undefined) => void;
 
@@ -21,10 +22,11 @@ export class AgentRuntime {
     private readonly model: Model<Api>,
     tools: AgentTool[],
     private readonly history: HistoryStore,
+    private readonly skills: SkillStore,
   ) {
     this.agent = new Agent({
       initialState: {
-        systemPrompt: SYSTEM_PROMPT,
+        systemPrompt: this.systemPrompt(),
         model,
         thinkingLevel: "off",
         tools,
@@ -38,6 +40,7 @@ export class AgentRuntime {
 
   async complete(context: string, onToolCall?: ToolCallListener): Promise<string> {
     this.agent.reset();
+    this.agent.state.systemPrompt = this.systemPrompt();
     this.onToolCall = onToolCall;
     this.latestAssistantText = "";
     try {
@@ -74,6 +77,11 @@ export class AgentRuntime {
 
   abort(): void {
     this.agent.abort();
+  }
+
+  private systemPrompt(): string {
+    const catalog = this.skills.catalogPrompt();
+    return catalog ? `${SYSTEM_PROMPT}\n\n${catalog}` : SYSTEM_PROMPT;
   }
 
   private handleEvent(event: AgentEvent): void {
