@@ -8,11 +8,7 @@ import { spokenText } from "./text.js";
 import type { StreamingAudio, Tts } from "./types.js";
 
 const { LinearResampler } = sherpa;
-const DEFAULT_INSTRUCT =
-  "A young female forest spirit with a bright, playful and melodic voice. " +
-  "Medium-high pitch, airy timbre, lively rising intonation and a warm smile. " +
-  "Curious, mischievous and slightly teasing, with clear natural Russian pronunciation. " +
-  "Light and musical without singing, whispering, shouting, artificial echo or excessive squeakiness.";
+const DEFAULT_INSTRUCT = "A warm, calm narrator with a clear and engaging delivery.";
 
 export class QwenTts implements Tts {
   private constructor(

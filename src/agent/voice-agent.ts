@@ -4,7 +4,7 @@ import { errorMessage, log } from "../common.js";
 import type { Transcript } from "../stt/index.js";
 import type { Tts, VoiceAudio } from "../tts/index.js";
 import type { HistoryEntry, HistoryStore } from "./history.js";
-import type { AgentLoop } from "./loop.js";
+import type { AgentRuntime } from "./runtime.js";
 import { hasStopCommand, hasWakeWord } from "./transcript.js";
 
 export class VoiceAgent {
@@ -13,7 +13,7 @@ export class VoiceAgent {
   private readonly generations = new Map<string, number>();
 
   constructor(
-    private readonly loop: AgentLoop,
+    private readonly runtime: AgentRuntime,
     private readonly history: HistoryStore,
     private readonly tts: Tts,
     private readonly fillers: GeneratedAudio[],
@@ -26,6 +26,7 @@ export class VoiceAgent {
     if (hasStopCommand(transcript.text)) {
       this.generations.set(transcript.guildId, (this.generations.get(transcript.guildId) ?? 0) + 1);
       this.responding.delete(transcript.guildId);
+      this.runtime.abort();
       this.stopSpeaking(transcript.guildId);
       log("info", "speech interrupted", { user: transcript.user });
       return;
@@ -83,12 +84,14 @@ export class VoiceAgent {
   private async respond(guildId: string, context: string, generation: number): Promise<void> {
     const started = performance.now();
     const announced = new Set<string>();
-    const answer = await this.loop.complete(context, (tool, args, suggestion) => {
+    const answer = await this.runtime.complete(context, (tool, args, suggestion) => {
       if (announced.has(tool)) return;
       announced.add(tool);
       void (async () => {
         const text =
-          suggestion && suggestion.length <= 200 ? suggestion : await this.loop.toolAnnouncement(context, tool, args);
+          suggestion && suggestion.length <= 200
+            ? suggestion
+            : await this.runtime.toolAnnouncement(context, tool, args);
         if (this.generations.get(guildId) !== generation) return;
         log("info", "tool announcement", { tool, text });
         await this.speak(guildId, this.tts.synthesize(text));

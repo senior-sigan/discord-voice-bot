@@ -1,5 +1,5 @@
 import { entersState, getVoiceConnection, joinVoiceChannel, VoiceConnectionStatus } from "@discordjs/voice";
-import type { Interaction } from "discord.js";
+import type { Guild, Interaction } from "discord.js";
 import { Client, Events, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder } from "discord.js";
 
 import { errorMessage, log } from "../common.js";
@@ -43,19 +43,29 @@ export class DiscordBot {
     this.agent = agent;
   }
 
-  async start(): Promise<void> {
+  async start(autoJoinChannel?: string): Promise<void> {
     if (!this.agent) throw new Error("Discord agent is not configured");
-    this.client.once(Events.ClientReady, async (readyClient) => {
-      const rest = new REST().setToken(this.token);
-      await rest.put(Routes.applicationGuildCommands(readyClient.user.id, this.guildId), {
-        body: [voiceCommand.toJSON()],
-      });
-      log("info", "bot is ready", { user: readyClient.user.tag });
-    });
+    const ready = new Promise<Client<true>>((resolve) => this.client.once(Events.ClientReady, resolve));
     this.client.on(Events.InteractionCreate, (interaction) => {
       void this.handleInteraction(interaction);
     });
     await this.client.login(this.token);
+    const readyClient = await ready;
+    const rest = new REST().setToken(this.token);
+    await rest.put(Routes.applicationGuildCommands(readyClient.user.id, this.guildId), {
+      body: [voiceCommand.toJSON()],
+    });
+    log("info", "bot is ready", { user: readyClient.user.tag });
+    if (autoJoinChannel) {
+      const guild = readyClient.guilds.cache.get(this.guildId);
+      if (!guild) throw new Error(`Discord guild not found: ${this.guildId}`);
+      try {
+        await this.joinVoice(guild, autoJoinChannel);
+      } catch (error) {
+        this.leaveVoice(guild.id);
+        log("error", "automatic voice join failed", { channel: autoJoinChannel, error: errorMessage(error) });
+      }
+    }
   }
 
   async speak(guildId: string, audio: VoiceAudio): Promise<void> {
@@ -105,36 +115,40 @@ export class DiscordBot {
         return;
       }
 
-      const requestedName = interaction.options.getString("channel", true);
-      const channel = interaction.guild.channels.cache.find(
-        (candidate) => candidate.isVoiceBased() && candidate.name.toLowerCase() === requestedName.toLowerCase(),
-      );
-      if (!channel) throw new Error(`voice channel not found: ${requestedName}`);
-
-      this.leaveVoice(interaction.guildId);
-      const connection = joinVoiceChannel({
-        channelId: channel.id,
-        guildId: interaction.guildId,
-        adapterCreator: interaction.guild.voiceAdapterCreator,
-        selfDeaf: false,
-        selfMute: false,
-      });
-      connection.on("error", (error) => log("error", "voice connection failed", { error: error.message }));
-      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
-      const botUserId = this.client.user?.id;
-      if (!botUserId) throw new Error("Discord client is not ready");
-      this.captures.set(
-        interaction.guildId,
-        new DiscordVoiceSession(connection, interaction.guild, this.transcriber, botUserId, (transcript) =>
-          this.agent?.onTranscript(transcript),
-        ),
-      );
-      log("info", "joined voice channel", { channel: channel.name });
-      await interaction.editReply(`Подключился к **${channel.name}**.`);
+      const channelName = await this.joinVoice(interaction.guild, interaction.options.getString("channel", true));
+      await interaction.editReply(`Подключился к **${channelName}**.`);
     } catch (error: unknown) {
       this.leaveVoice(interaction.guildId);
       log("error", "voice command failed", { error: errorMessage(error) });
       await interaction.editReply(`Ошибка: ${errorMessage(error)}`);
     }
+  }
+
+  private async joinVoice(guild: Guild, requestedName: string): Promise<string> {
+    const channel = guild.channels.cache.find(
+      (candidate) => candidate.isVoiceBased() && candidate.name.toLowerCase() === requestedName.toLowerCase(),
+    );
+    if (!channel) throw new Error(`voice channel not found: ${requestedName}`);
+
+    this.leaveVoice(guild.id);
+    const connection = joinVoiceChannel({
+      channelId: channel.id,
+      guildId: guild.id,
+      adapterCreator: guild.voiceAdapterCreator,
+      selfDeaf: false,
+      selfMute: false,
+    });
+    connection.on("error", (error) => log("error", "voice connection failed", { error: error.message }));
+    await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    const botUserId = this.client.user?.id;
+    if (!botUserId) throw new Error("Discord client is not ready");
+    this.captures.set(
+      guild.id,
+      new DiscordVoiceSession(connection, guild, this.transcriber, botUserId, (transcript) =>
+        this.agent?.onTranscript(transcript),
+      ),
+    );
+    log("info", "joined voice channel", { channel: channel.name });
+    return channel.name;
   }
 }

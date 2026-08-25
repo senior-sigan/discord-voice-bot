@@ -1,20 +1,22 @@
-import type { AgentTool } from "./types.js";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { Type } from "@earendil-works/pi-ai";
 
-export const currentDateTimeTool: AgentTool = {
-  name: "get_current_datetime",
-  description: "Возвращает точные текущие дату и время в указанном часовом поясе.",
-  parameters: {
-    type: "object",
-    properties: {
-      timezone: { type: "string", description: "Часовой пояс IANA, например Asia/Omsk" },
-    },
-    additionalProperties: false,
+import { textResult } from "./types.js";
+
+const parameters = Type.Object(
+  {
+    timezone: Type.Optional(Type.String({ description: "Часовой пояс IANA, например Asia/Omsk" })),
   },
-  async execute(args) {
-    const timezone =
-      typeof args["timezone"] === "string" && args["timezone"].trim()
-        ? args["timezone"].trim()
-        : Intl.DateTimeFormat().resolvedOptions().timeZone;
+  { additionalProperties: false },
+);
+
+export const currentDateTimeTool: AgentTool<typeof parameters> = {
+  name: "get_current_datetime",
+  label: "Текущее время",
+  description: "Возвращает точные текущие дату и время в указанном часовом поясе.",
+  parameters,
+  async execute(_toolCallId, args) {
+    const timezone = args.timezone?.trim() || Intl.DateTimeFormat().resolvedOptions().timeZone;
     const now = new Date();
     let local: string;
     try {
@@ -26,6 +28,6 @@ export const currentDateTimeTool: AgentTool = {
     } catch {
       throw new Error(`Unknown IANA timezone: ${timezone}`);
     }
-    return { utc: now.toISOString(), timezone, local };
+    return textResult({ utc: now.toISOString(), timezone, local });
   },
 };

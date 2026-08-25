@@ -4,17 +4,29 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import {
+  createModels,
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxText,
+  fauxToolCall,
+  validateToolCall,
+} from "@earendil-works/pi-ai";
+
 import { HistoryStore, searchHistory } from "./agent/history.js";
-import type { ChatRequest, LlmClient } from "./agent/llm-client.js";
-import { needsThinkingPrefill, selectLlmModel } from "./agent/llm-client.js";
-import { AgentLoop } from "./agent/loop.js";
+import { MemoryStore } from "./agent/memory.js";
+import { AgentRuntime } from "./agent/runtime.js";
 import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/transcript.js";
 import { floatMonoToStereoPcm, pcm16MonoWavToFloat, stereoPcmToMono } from "./audio.js";
 import { formatMessageTime } from "./common.js";
 import { isRetryableLlmError, parseExplanation, resizeImageForLlm } from "./scripts/explain-memes.js";
 import { imageFileName, isImageAttachment } from "./scripts/export-memes.js";
 import { containsSpeech } from "./stt/vad.js";
-import { executeTool, isSafePublicUrl, requiredToolForContext } from "./tools/index.js";
+import { currentDateTimeTool } from "./tools/datetime.js";
+import { createMemeSearchTool } from "./tools/memes.js";
+import { createRememberTool, createSearchMemoryTool } from "./tools/memory.js";
+import { createRecallHistoryTool } from "./tools/recall.js";
+import { isSafePublicUrl } from "./tools/web.js";
 
 test("meme explanation parser normalizes valid structured output", () => {
   assert.deepEqual(
@@ -133,68 +145,29 @@ test("message time contains only local time", () => {
   assert.equal(formatMessageTime(new Date(2026, 7, 24, 9, 5, 3)), "09:05:03");
 });
 
-test("thinking prefill is limited to Qwen 3 models", () => {
-  assert.equal(needsThinkingPrefill("qwen3.5-9b"), true);
-  assert.equal(needsThinkingPrefill("qwen/qwen3.6-35b-a3b"), true);
-  assert.equal(needsThinkingPrefill("qwen/qwen3.8-27b"), true);
-  assert.equal(needsThinkingPrefill("qwen/qwen3-8b"), true);
-  assert.equal(needsThinkingPrefill("google/gemma-4-e4b"), false);
-});
+test("Pi agent executes a tool and continues to the final answer", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-pi-"));
+  try {
+    const history = new HistoryStore(join(directory, "history.jsonl"));
+    const faux = fauxProvider();
+    const models = createModels();
+    models.setProvider(faux.provider);
+    faux.setResponses([
+      fauxAssistantMessage(
+        [fauxText("Сейчас проверю."), fauxToolCall("get_current_datetime", { timezone: "Asia/Omsk" })],
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Готово."),
+    ]);
+    const runtime = new AgentRuntime(models, faux.getModel(), [currentDateTimeTool], history);
+    const calls: string[] = [];
 
-test("current fact questions require the matching tool", () => {
-  assert.equal(requiredToolForContext("[10:00:00] Илья: Олег, какая погода в Омске?"), "web_search");
-  assert.equal(requiredToolForContext("[10:00:00] Илья: Когда вышло последнее обновление Deadlock?"), "web_search");
-  assert.equal(requiredToolForContext("[10:00:00] Илья: Олег, который час?"), "get_current_datetime");
-  assert.equal(requiredToolForContext("[10:00:00] Илья: Олег, помнишь, что ты говорил?"), "recall_history");
-  assert.equal(requiredToolForContext("[10:00:00] Илья: Олег, расскажи анекдот"), undefined);
-});
-
-test("configured LM Studio model resolves its unique API suffix", () => {
-  assert.equal(selectLlmModel("gemma-4-e4b", ["gemma-4-e4b-it", "qwen3.5-9b"]), "gemma-4-e4b-it");
-  assert.equal(selectLlmModel("gemma-4-e4b", ["gemma-4-e4b-it", "gemma-4-e4b-qat"]), undefined);
-});
-
-test("agent loop returns tool results to the model before the final answer", async () => {
-  const requests: ChatRequest[] = [];
-  const client: LlmClient = {
-    async modelName() {
-      return "google/gemma-4-e4b";
-    },
-    async chat(request) {
-      requests.push(request);
-      return requests.length === 1
-        ? {
-            role: "assistant",
-            content: "Сейчас повторю.",
-            tool_calls: [
-              {
-                id: "call-1",
-                type: "function",
-                function: { name: "echo", arguments: '{"text":"привет"}' },
-              },
-            ],
-          }
-        : { role: "assistant", content: "Готово." };
-    },
-  };
-  const loop = new AgentLoop(client, [
-    {
-      name: "echo",
-      description: "Повторяет текст",
-      parameters: { type: "object" },
-      async execute(args) {
-        return args;
-      },
-    },
-  ]);
-
-  assert.equal(await loop.complete("[10:00:00] Илья: Олег, повтори привет"), "Готово.");
-  assert.equal(requests.length, 2);
-  assert.deepEqual(requests[1]?.messages.at(-1), {
-    role: "tool",
-    tool_call_id: "call-1",
-    content: '{"text":"привет"}',
-  });
+    assert.equal(await runtime.complete("[10:00:00] Илья: Олег, который час?", (name) => calls.push(name)), "Готово.");
+    assert.deepEqual(calls, ["get_current_datetime"]);
+    assert.equal(history.entries.at(-1)?.tool, "get_current_datetime");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("mono float audio becomes stereo PCM", () => {
@@ -232,9 +205,19 @@ test("web tools reject local URLs and validate arguments", async () => {
   assert.equal(isSafePublicUrl("http://[::ffff:127.0.0.1]/private"), false);
   assert.equal(isSafePublicUrl("file:///etc/passwd"), false);
 
-  const result = await executeTool("get_current_datetime", JSON.stringify({ timezone: "Asia/Omsk" }));
-  assert.equal(typeof result === "object" && result !== null && "local" in result, true);
-  await assert.rejects(executeTool("get_current_datetime", "{bad"), /valid JSON/);
+  const call = {
+    type: "toolCall" as const,
+    id: "test-time",
+    name: "get_current_datetime",
+    arguments: { timezone: "Asia/Omsk" },
+  };
+  const args = validateToolCall([currentDateTimeTool], call);
+  const result = await currentDateTimeTool.execute(call.id, args);
+  assert.equal(typeof result.details === "object" && result.details !== null && "local" in result.details, true);
+  assert.throws(
+    () => validateToolCall([currentDateTimeTool], { ...call, arguments: { timezone: {} } }),
+    /validation failed/iu,
+  );
 });
 
 test("history survives restart and supports filtered fuzzy recall", async () => {
@@ -251,18 +234,109 @@ test("history survives restart and supports filtered fuzzy recall", async () => 
     assert.equal(readFileSync(path, "utf8").trim().split("\n").length, 3);
     assert.equal(searchHistory(reloaded.entries, { query: "падушка", speaker: "Илья" })[0]?.entry.kind, "transcript");
 
-    const recalled = await executeTool(
-      "recall_history",
-      JSON.stringify({
-        query: "ты сегодня говорил про подушку",
-        date: "2026-08-25",
-        kind: "assistant",
-      }),
-      reloaded,
-    );
+    const recalled = await createRecallHistoryTool(reloaded).execute("test-recall", {
+      query: "ты сегодня говорил про подушку",
+      date: "2026-08-25",
+      kind: "assistant",
+    });
     assert.equal(
-      typeof recalled === "object" && recalled !== null && "count" in recalled && recalled.count === 1,
+      typeof recalled.details === "object" &&
+        recalled.details !== null &&
+        "count" in recalled.details &&
+        recalled.details.count === 1,
       true,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("meme search uses descriptions, natural dates, and returns raw JSONL", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-meme-search-"));
+  const path = join(directory, "memes.jsonl");
+  const previousYear = new Date().getFullYear() - 1;
+  const ignored = JSON.stringify({
+    timestamp: `${previousYear}-05-01T10:00:00Z`,
+    description: "Человек задумчиво смотрит бессмысленный контент.",
+    use_for: "Когда нужен котёнок за рулём.",
+    tags: ["котёнок", "автомобиль"],
+  });
+  const expected = JSON.stringify({
+    timestamp: `${previousYear}-06-01T10:00:00Z`,
+    description: "Котёнок сидит за рулём автомобиля и серьёзно смотрит вперёд.",
+    use_for: "Когда уверенно ведёшь проект.",
+    tags: ["водитель"],
+  });
+  const current = JSON.stringify({
+    timestamp: `${previousYear + 1}-06-01T10:00:00Z`,
+    description: "Котёнок сидит за рулём автомобиля.",
+  });
+  try {
+    writeFileSync(path, `${ignored}\n${expected}\n${current}\n`);
+    const result = await createMemeSearchTool(path).execute("test-memes", {
+      query: "найди мем про котенка в прошлом году",
+      limit: 5,
+    });
+    assert.equal(result.content[0]?.type === "text" ? result.content[0].text : "", expected);
+    assert.deepEqual((result.details as { results: string[] }).results, [expected]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("curated memory requires user evidence, persists, and supports fuzzy search", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-memory-"));
+  const historyPath = join(directory, "history.jsonl");
+  const memoryPath = join(directory, "memory.jsonl");
+  try {
+    const history = new HistoryStore(historyPath);
+    history.appendMessage(
+      "transcript",
+      "Илья",
+      "Олег, запомни: я люблю кофе без сахара",
+      new Date(2026, 7, 25, 12, 0, 0),
+    );
+    const memory = new MemoryStore(memoryPath);
+    const remember = createRememberTool(memory, history);
+    const saved = await remember.execute("remember-1", {
+      fact: "Илья любит кофе без сахара",
+      source_quote: "я люблю кофе без сахара",
+      speaker: "Илья",
+    });
+    assert.equal((saved.details as { saved: boolean }).saved, true);
+    const duplicate = await remember.execute("remember-2", {
+      fact: "Илья любит кофе без сахара",
+      source_quote: "я люблю кофе без сахара",
+      speaker: "Илья",
+    });
+    assert.equal((duplicate.details as { saved: boolean }).saved, false);
+    await assert.rejects(
+      remember.execute("remember-invalid", {
+        fact: "Илья любит чай",
+        source_quote: "я люблю чай",
+        speaker: "Илья",
+      }),
+      /not found/iu,
+    );
+    history.appendMessage("transcript", "Илья", "Я люблю чай", new Date(2026, 7, 25, 12, 1, 0));
+    await assert.rejects(
+      remember.execute("remember-not-requested", {
+        fact: "Илья любит чай",
+        source_quote: "Я люблю чай",
+        speaker: "Илья",
+      }),
+      /did not explicitly ask/iu,
+    );
+
+    const reloaded = new MemoryStore(memoryPath);
+    assert.equal(reloaded.entries.length, 1);
+    const recalled = await createSearchMemoryTool(reloaded).execute("search-memory", {
+      query: "кофе без сахар",
+    });
+    assert.equal((recalled.details as { count: number }).count, 1);
+    assert.equal(
+      (recalled.details as { results: Array<{ evidence: string }> }).results[0]?.evidence,
+      "я люблю кофе без сахара",
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });

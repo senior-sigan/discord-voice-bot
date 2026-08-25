@@ -1,9 +1,10 @@
 import { fileURLToPath } from "node:url";
 
 import { HistoryStore } from "./agent/history.js";
-import { LocalLlmClient } from "./agent/llm-client.js";
-import { AgentLoop } from "./agent/loop.js";
+import { MemoryStore } from "./agent/memory.js";
+import { AgentRuntime } from "./agent/runtime.js";
 import { VoiceAgent } from "./agent/voice-agent.js";
+import { createAiRuntime } from "./ai/runtime.js";
 import { errorMessage, log } from "./common.js";
 import { loadConfig } from "./config.js";
 import { DiscordBot } from "./discord/bot.js";
@@ -14,13 +15,15 @@ import { createTts, loadFillers } from "./tts/index.js";
 async function run(): Promise<void> {
   const config = loadConfig();
   const history = new HistoryStore(config.historyFile);
-  const loop = new AgentLoop(new LocalLlmClient(config.llmBaseUrl), createTools(history), history);
+  const memory = new MemoryStore(config.memoryFile);
+  const ai = await createAiRuntime(config, process.argv.includes("--select-model"));
+  const agentRuntime = new AgentRuntime(ai.models, ai.model, createTools(history, memory), history);
   const tts = await createTts(config.ttsModelDir);
   const transcriber = await ParakeetTranscriber.create(config.sttModelDir, config.vadModel, config.vadThreshold);
   const discord = new DiscordBot(config.discordToken, config.discordGuildId, transcriber);
   discord.setAgent(
     new VoiceAgent(
-      loop,
+      agentRuntime,
       history,
       tts,
       loadFillers(config.fillerDir),
@@ -41,7 +44,7 @@ async function run(): Promise<void> {
   };
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
-  await discord.start();
+  await discord.start(process.argv.includes("--autojoin") ? "master" : undefined);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

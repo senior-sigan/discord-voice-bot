@@ -3,7 +3,12 @@ node_modules/
 dist/
 recordings/
 history.jsonl
+memory.jsonl
+auth.json
 memes/
 references/
 ./voice-agents
 .env
+
+assets/
+qwen-tts/

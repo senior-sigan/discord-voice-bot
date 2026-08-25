@@ -75,6 +75,7 @@ function normalizedWords(value: string): string[] {
   ]);
   return value
     .toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е")
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim()
     .split(/\s+/)
