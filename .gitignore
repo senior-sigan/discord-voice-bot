@@ -1,0 +1,9 @@
+models/
+node_modules/
+dist/
+recordings/
+history.jsonl
+memes/
+references/
+./voice-agents
+.env

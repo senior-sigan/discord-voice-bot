@@ -1,0 +1,140 @@
+import { entersState, getVoiceConnection, joinVoiceChannel, VoiceConnectionStatus } from "@discordjs/voice";
+import type { Interaction } from "discord.js";
+import { Client, Events, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder } from "discord.js";
+
+import { errorMessage, log } from "../common.js";
+import type { Transcriber, Transcript } from "../stt/index.js";
+import type { VoiceAudio } from "../tts/index.js";
+import { DiscordVoiceSession } from "./voice-session.js";
+
+export interface DiscordAgent {
+  onTranscript(transcript: Transcript): void;
+  clear(guildId: string): void;
+}
+
+const voiceCommand = new SlashCommandBuilder()
+  .setName("voice")
+  .setDescription("Manage the voice agent")
+  .addSubcommand((command) =>
+    command
+      .setName("join")
+      .setDescription("Join a voice channel")
+      .addStringOption((option) =>
+        option.setName("channel").setDescription("Voice channel name, for example master").setRequired(true),
+      ),
+  )
+  .addSubcommand((command) => command.setName("leave").setDescription("Leave the voice channel"));
+
+export class DiscordBot {
+  private readonly captures = new Map<string, DiscordVoiceSession>();
+  private readonly client = new Client({
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
+  });
+  private agent: DiscordAgent | undefined;
+  private stopped = false;
+
+  constructor(
+    private readonly token: string,
+    private readonly guildId: string,
+    private readonly transcriber: Transcriber,
+  ) {}
+
+  setAgent(agent: DiscordAgent): void {
+    this.agent = agent;
+  }
+
+  async start(): Promise<void> {
+    if (!this.agent) throw new Error("Discord agent is not configured");
+    this.client.once(Events.ClientReady, async (readyClient) => {
+      const rest = new REST().setToken(this.token);
+      await rest.put(Routes.applicationGuildCommands(readyClient.user.id, this.guildId), {
+        body: [voiceCommand.toJSON()],
+      });
+      log("info", "bot is ready", { user: readyClient.user.tag });
+    });
+    this.client.on(Events.InteractionCreate, (interaction) => {
+      void this.handleInteraction(interaction);
+    });
+    await this.client.login(this.token);
+  }
+
+  async speak(guildId: string, audio: VoiceAudio): Promise<void> {
+    const capture = this.captures.get(guildId);
+    if (!capture) throw new Error("Voice connection is no longer active");
+    await capture.speak(audio);
+  }
+
+  interrupt(guildId: string): void {
+    this.captures.get(guildId)?.interruptSpeech();
+  }
+
+  async stop(): Promise<void> {
+    if (this.stopped) return;
+    this.stopped = true;
+    for (const guildId of this.captures.keys()) this.leaveVoice(guildId);
+    this.leaveVoice(this.guildId);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    this.client.destroy();
+  }
+
+  private leaveVoice(guildId: string): boolean {
+    const capture = this.captures.get(guildId);
+    capture?.stop();
+    this.captures.delete(guildId);
+    this.agent?.clear(guildId);
+    const connection = capture?.connection ?? getVoiceConnection(guildId);
+    if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) {
+      connection.destroy();
+      log("info", "left voice channel");
+    }
+    return Boolean(connection);
+  }
+
+  private async handleInteraction(interaction: Interaction): Promise<void> {
+    if (!interaction.isChatInputCommand() || interaction.commandName !== "voice") return;
+    if (!interaction.inCachedGuild()) {
+      await interaction.reply({ content: "Команда доступна только на сервере.", flags: MessageFlags.Ephemeral });
+      return;
+    }
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    try {
+      if (interaction.options.getSubcommand() === "leave") {
+        const left = this.leaveVoice(interaction.guildId);
+        await interaction.editReply(left ? "Отключился от голосового канала." : "Я не подключён к голосовому каналу.");
+        return;
+      }
+
+      const requestedName = interaction.options.getString("channel", true);
+      const channel = interaction.guild.channels.cache.find(
+        (candidate) => candidate.isVoiceBased() && candidate.name.toLowerCase() === requestedName.toLowerCase(),
+      );
+      if (!channel) throw new Error(`voice channel not found: ${requestedName}`);
+
+      this.leaveVoice(interaction.guildId);
+      const connection = joinVoiceChannel({
+        channelId: channel.id,
+        guildId: interaction.guildId,
+        adapterCreator: interaction.guild.voiceAdapterCreator,
+        selfDeaf: false,
+        selfMute: false,
+      });
+      connection.on("error", (error) => log("error", "voice connection failed", { error: error.message }));
+      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+      const botUserId = this.client.user?.id;
+      if (!botUserId) throw new Error("Discord client is not ready");
+      this.captures.set(
+        interaction.guildId,
+        new DiscordVoiceSession(connection, interaction.guild, this.transcriber, botUserId, (transcript) =>
+          this.agent?.onTranscript(transcript),
+        ),
+      );
+      log("info", "joined voice channel", { channel: channel.name });
+      await interaction.editReply(`Подключился к **${channel.name}**.`);
+    } catch (error: unknown) {
+      this.leaveVoice(interaction.guildId);
+      log("error", "voice command failed", { error: errorMessage(error) });
+      await interaction.editReply(`Ошибка: ${errorMessage(error)}`);
+    }
+  }
+}

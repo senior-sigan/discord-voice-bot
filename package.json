@@ -1,0 +1,27 @@
+{
+  "name": "voice-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "format": "biome format --write .",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "start": "npm run build && node --env-file=.env dist/main.js",
+    "export-memes": "npm run build && node --env-file=.env dist/scripts/export-memes.js",
+    "explain-memes": "npm run build && node --env-file=.env dist/scripts/explain-memes.js",
+    "test": "npm run build && node --test dist/main.test.js",
+    "check": "tsc --noEmit && biome check . && npm test"
+  },
+  "dependencies": {
+    "@discordjs/opus": "0.10.0",
+    "@discordjs/voice": "0.19.2",
+    "discord.js": "14.27.0",
+    "sherpa-onnx-node": "1.13.6"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.10",
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  }
+}
