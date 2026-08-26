@@ -11,9 +11,16 @@ const IMAGE_EXTENSIONS = new Set([".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".pn
 export interface DiscordToolsClient {
   voiceMembers(channel: string): Promise<Array<{ id: string; name: string; bot: boolean }>>;
   sendMessage(channel: string, content?: string, imagePath?: string): Promise<{ id: string; url: string }>;
+  soundboardSounds(): Promise<Array<{ id: string; name: string; emoji?: string }>>;
+  playSoundboard(channel: string, soundId: string): Promise<{ id: string; name: string }>;
 }
 
 const membersParameters = Type.Object({}, { additionalProperties: false });
+const soundsParameters = Type.Object({}, { additionalProperties: false });
+const playSoundParameters = Type.Object(
+  { sound_id: Type.String({ minLength: 1, description: "ID подходящего звука из discord_soundboard_sounds" }) },
+  { additionalProperties: false },
+);
 const sendParameters = Type.Object(
   {
     content: Type.Optional(Type.String({ maxLength: 2_000, description: "Текст сообщения или ссылки" })),
@@ -47,7 +54,30 @@ export function createDiscordTools(discord: DiscordToolsClient): AgentTool[] {
       return textResult({ channel: "общак", ...message });
     },
   };
-  return [members, send];
+  const sounds: AgentTool<typeof soundsParameters> = {
+    name: "discord_soundboard_sounds",
+    label: "Звуки Discord soundboard",
+    description:
+      "Возвращает доступные звуки soundboard. Используй перед discord_soundboard_play, чтобы выбрать уместный звук по названию.",
+    parameters: soundsParameters,
+    async execute() {
+      const items = await discord.soundboardSounds();
+      return textResult({ count: items.length, sounds: items });
+    },
+  };
+  const playSound: AgentTool<typeof playSoundParameters> = {
+    name: "discord_soundboard_play",
+    label: "Воспроизвести звук Discord",
+    description:
+      "Молча воспроизводит один выбранный soundboard-звук в голосовом канале master. Используй редко и только когда звук точно подходит к ситуации.",
+    parameters: playSoundParameters,
+    async execute(_toolCallId, args) {
+      const soundId = args.sound_id.trim();
+      if (!soundId) throw new Error("sound_id must not be blank");
+      return textResult({ channel: "master", ...(await discord.playSoundboard("master", soundId)) });
+    },
+  };
+  return [members, send, sounds, playSound];
 }
 
 export function safeImagePath(value: string): string {

@@ -85,6 +85,7 @@ export class VoiceAgent {
     const started = performance.now();
     const announced = new Set<string>();
     const answer = await this.runtime.complete(context, (tool, args, suggestion) => {
+      if (tool.startsWith("discord_soundboard_")) return;
       if (announced.has(tool)) return;
       announced.add(tool);
       void (async () => {

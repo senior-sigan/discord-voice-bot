@@ -1,6 +1,15 @@
 import { entersState, getVoiceConnection, joinVoiceChannel, VoiceConnectionStatus } from "@discordjs/voice";
 import type { Guild, Interaction } from "discord.js";
-import { Client, Events, GatewayIntentBits, MessageFlags, REST, Routes, SlashCommandBuilder } from "discord.js";
+import {
+  ChannelType,
+  Client,
+  Events,
+  GatewayIntentBits,
+  MessageFlags,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+} from "discord.js";
 
 import { errorMessage, log } from "../common.js";
 import type { Transcriber, Transcript } from "../stt/index.js";
@@ -100,6 +109,33 @@ export class DiscordBot {
       allowedMentions: { parse: [] },
     });
     return { id: message.id, url: message.url };
+  }
+
+  async soundboardSounds(): Promise<Array<{ id: string; name: string; emoji?: string }>> {
+    const guild = this.client.guilds.cache.get(this.guildId);
+    if (!guild) throw new Error(`Discord guild not found: ${this.guildId}`);
+    return [...(await guild.soundboardSounds.fetch()).values()]
+      .filter((sound) => sound.available)
+      .map((sound) => ({
+        id: sound.soundId,
+        name: sound.name,
+        ...(sound.emoji ? { emoji: sound.emoji.toString() } : {}),
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name, "ru"));
+  }
+
+  async playSoundboard(channelName: string, soundId: string): Promise<{ id: string; name: string }> {
+    const guild = this.client.guilds.cache.get(this.guildId);
+    if (!guild) throw new Error(`Discord guild not found: ${this.guildId}`);
+    const channel = guild.channels.cache.find(
+      (candidate) =>
+        candidate.type === ChannelType.GuildVoice && candidate.name.toLowerCase() === channelName.toLowerCase(),
+    );
+    if (channel?.type !== ChannelType.GuildVoice) throw new Error(`voice channel not found: ${channelName}`);
+    const sound = await guild.soundboardSounds.fetch(soundId);
+    if (!sound.available) throw new Error(`soundboard sound is unavailable: ${soundId}`);
+    await channel.sendSoundboardSound(sound);
+    return { id: sound.soundId, name: sound.name };
   }
 
   interrupt(guildId: string): void {

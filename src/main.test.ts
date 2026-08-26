@@ -296,7 +296,7 @@ test("Discord tools list master members and send workspace images to общак"
     const image = join(directory, "result.png");
     writeFileSync(image, "test");
     const calls: unknown[][] = [];
-    const [members, send] = createDiscordTools({
+    const [members, send, sounds, playSound] = createDiscordTools({
       async voiceMembers(channel) {
         calls.push(["members", channel]);
         return [{ id: "1", name: "Илья", bot: false }];
@@ -305,16 +305,28 @@ test("Discord tools list master members and send workspace images to общак"
         calls.push(["send", channel, content, imagePath]);
         return { id: "2", url: "https://discord.test/message" };
       },
+      async soundboardSounds() {
+        calls.push(["sounds"]);
+        return [{ id: "3", name: "Ба-дум-тс", emoji: "🥁" }];
+      },
+      async playSoundboard(channel, soundId) {
+        calls.push(["play", channel, soundId]);
+        return { id: soundId, name: "Ба-дум-тс" };
+      },
     });
-    assert.ok(members && send);
+    assert.ok(members && send && sounds && playSound);
     assert.equal((await members.execute("members", {})).details?.count, 1);
     assert.equal(
       (await send.execute("send", { content: " https://example.com/image ", image_path: image })).details?.channel,
       "общак",
     );
+    assert.equal((await sounds.execute("sounds", {})).details?.count, 1);
+    assert.equal((await playSound.execute("play", { sound_id: "3" })).details?.name, "Ба-дум-тс");
     assert.deepEqual(calls, [
       ["members", "master"],
       ["send", "общак", "https://example.com/image", safeImagePath(image)],
+      ["sounds"],
+      ["play", "master", "3"],
     ]);
     await assert.rejects(send.execute("empty", {}), /content or image_path/u);
     assert.throws(() => safeImagePath("/etc/hosts"), /inside the workspace/u);
