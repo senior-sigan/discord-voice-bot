@@ -20,10 +20,16 @@ async function run(): Promise<void> {
   const skills = new SkillStore();
   await skills.load();
   const ai = await createAiRuntime(config, process.argv.includes("--select-model"));
-  const agentRuntime = new AgentRuntime(ai.models, ai.model, createTools(history, memory, skills), history, skills);
   const tts = await createTts(config.ttsModelDir);
   const transcriber = await ParakeetTranscriber.create(config.sttModelDir, config.vadModel, config.vadThreshold);
   const discord = new DiscordBot(config.discordToken, config.discordGuildId, transcriber);
+  const agentRuntime = new AgentRuntime(
+    ai.models,
+    ai.model,
+    createTools(history, memory, skills, discord),
+    history,
+    skills,
+  );
   discord.setAgent(
     new VoiceAgent(
       agentRuntime,

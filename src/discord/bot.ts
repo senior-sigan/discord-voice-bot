@@ -74,6 +74,34 @@ export class DiscordBot {
     await capture.speak(audio);
   }
 
+  async voiceMembers(channelName: string): Promise<Array<{ id: string; name: string; bot: boolean }>> {
+    const guild = this.client.guilds.cache.get(this.guildId);
+    if (!guild) throw new Error(`Discord guild not found: ${this.guildId}`);
+    const channel = guild.channels.cache.find(
+      (candidate) => candidate.isVoiceBased() && candidate.name.toLowerCase() === channelName.toLowerCase(),
+    );
+    if (!channel?.isVoiceBased()) throw new Error(`voice channel not found: ${channelName}`);
+    return [...channel.members.values()]
+      .filter((member) => member.id !== this.client.user?.id)
+      .map((member) => ({ id: member.id, name: member.displayName, bot: member.user.bot }))
+      .sort((left, right) => left.name.localeCompare(right.name, "ru"));
+  }
+
+  async sendMessage(channelName: string, content?: string, imagePath?: string): Promise<{ id: string; url: string }> {
+    const guild = this.client.guilds.cache.get(this.guildId);
+    if (!guild) throw new Error(`Discord guild not found: ${this.guildId}`);
+    const channel = guild.channels.cache.find(
+      (candidate) => candidate.name.toLowerCase() === channelName.toLowerCase() && candidate.isSendable(),
+    );
+    if (!channel?.isSendable()) throw new Error(`sendable channel not found: ${channelName}`);
+    const message = await channel.send({
+      ...(content ? { content } : {}),
+      ...(imagePath ? { files: [imagePath] } : {}),
+      allowedMentions: { parse: [] },
+    });
+    return { id: message.id, url: message.url };
+  }
+
   interrupt(guildId: string): void {
     this.captures.get(guildId)?.interruptSpeech();
   }

@@ -4,6 +4,7 @@ import type { HistoryStore } from "../agent/history.js";
 import type { MemoryStore } from "../agent/memory.js";
 import type { SkillStore } from "../agent/skills.js";
 import { currentDateTimeTool } from "./datetime.js";
+import { createDiscordTools, type DiscordToolsClient } from "./discord.js";
 import { createMemeSearchTool } from "./memes.js";
 import { createRememberTool, createSearchMemoryTool } from "./memory.js";
 import { createRecallHistoryTool } from "./recall.js";
@@ -12,7 +13,12 @@ import { webFetchTool, webSearchTool } from "./web.js";
 
 export { isSafePublicUrl } from "./web.js";
 
-export function createTools(history: HistoryStore, memory: MemoryStore, skills: SkillStore): AgentTool[] {
+export function createTools(
+  history: HistoryStore,
+  memory: MemoryStore,
+  skills: SkillStore,
+  discord: DiscordToolsClient,
+): AgentTool[] {
   return [
     currentDateTimeTool,
     webSearchTool,
@@ -21,6 +27,7 @@ export function createTools(history: HistoryStore, memory: MemoryStore, skills: 
     createRememberTool(memory, history),
     createSearchMemoryTool(memory),
     createMemeSearchTool(),
+    ...createDiscordTools(discord),
     ...createSkillTools(skills),
   ];
 }

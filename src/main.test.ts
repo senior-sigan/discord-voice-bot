@@ -24,6 +24,7 @@ import { isRetryableLlmError, parseExplanation, resizeImageForLlm } from "./scri
 import { imageFileName, isImageAttachment } from "./scripts/export-memes.js";
 import { containsSpeech } from "./stt/vad.js";
 import { currentDateTimeTool } from "./tools/datetime.js";
+import { createDiscordTools, safeImagePath } from "./tools/discord.js";
 import { createMemeSearchTool } from "./tools/memes.js";
 import { createRememberTool, createSearchMemoryTool } from "./tools/memory.js";
 import { createRecallHistoryTool } from "./tools/recall.js";
@@ -122,16 +123,20 @@ test("VAD gates audio and resets between chunks", () => {
   assert.equal(resets, 2);
 });
 
-test("wake word matches Олег as a separate word", () => {
+test("wake word tolerates common STT variants as separate words", () => {
   assert.equal(hasWakeWord("Олег, что ты думаешь?"), true);
   assert.equal(hasWakeWord("Что ты думаешь, олег?"), true);
+  assert.equal(hasWakeWord("Олега, что ты думаешь?"), true);
+  assert.equal(hasWakeWord("Ольга, что ты думаешь?"), true);
   assert.equal(hasWakeWord("Это олегов ответ"), false);
+  assert.equal(hasWakeWord("Это Ольгин ответ"), false);
 });
 
 test("stop command requires Oleg and an explicit stop word", () => {
   assert.equal(hasStopCommand("Олег СТОЙ"), true);
   assert.equal(hasStopCommand("олег, остановись!"), true);
   assert.equal(hasStopCommand("Олег — хватит."), true);
+  assert.equal(hasStopCommand("Ольга, стой!"), true);
   assert.equal(hasStopCommand("Стой, Олег"), false);
   assert.equal(hasStopCommand("Олег, продолжай"), false);
 });
@@ -283,6 +288,39 @@ test("web tools reject local URLs and validate arguments", async () => {
     () => validateToolCall([currentDateTimeTool], { ...call, arguments: { timezone: {} } }),
     /validation failed/iu,
   );
+});
+
+test("Discord tools list master members and send workspace images to общак", async () => {
+  const directory = mkdtempSync(join(process.cwd(), ".discord-tools-"));
+  try {
+    const image = join(directory, "result.png");
+    writeFileSync(image, "test");
+    const calls: unknown[][] = [];
+    const [members, send] = createDiscordTools({
+      async voiceMembers(channel) {
+        calls.push(["members", channel]);
+        return [{ id: "1", name: "Илья", bot: false }];
+      },
+      async sendMessage(channel, content, imagePath) {
+        calls.push(["send", channel, content, imagePath]);
+        return { id: "2", url: "https://discord.test/message" };
+      },
+    });
+    assert.ok(members && send);
+    assert.equal((await members.execute("members", {})).details?.count, 1);
+    assert.equal(
+      (await send.execute("send", { content: " https://example.com/image ", image_path: image })).details?.channel,
+      "общак",
+    );
+    assert.deepEqual(calls, [
+      ["members", "master"],
+      ["send", "общак", "https://example.com/image", safeImagePath(image)],
+    ]);
+    await assert.rejects(send.execute("empty", {}), /content or image_path/u);
+    assert.throws(() => safeImagePath("/etc/hosts"), /inside the workspace/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("history survives restart and supports filtered fuzzy recall", async () => {
