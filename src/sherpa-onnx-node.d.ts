@@ -94,6 +94,7 @@ declare module "sherpa-onnx-node" {
     OfflineTts: typeof OfflineTts;
     Vad: typeof Vad;
     readWave(filename: string): GeneratedAudio;
+    writeWave(filename: string, audio: GeneratedAudio): boolean;
   };
   export default sherpa;
 }

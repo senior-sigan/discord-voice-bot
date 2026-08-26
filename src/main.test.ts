@@ -18,7 +18,7 @@ import { MemoryStore } from "./agent/memory.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { SkillStore } from "./agent/skills.js";
 import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/transcript.js";
-import { floatMonoToStereoPcm, pcm16MonoWavToFloat, stereoPcmToMono } from "./audio.js";
+import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio.js";
 import { formatMessageTime } from "./common.js";
 import { isRetryableLlmError, parseExplanation, resizeImageForLlm } from "./scripts/explain-memes.js";
 import { imageFileName, isImageAttachment } from "./scripts/export-memes.js";
@@ -29,6 +29,7 @@ import { createRememberTool, createSearchMemoryTool } from "./tools/memory.js";
 import { createRecallHistoryTool } from "./tools/recall.js";
 import { createSkillTools } from "./tools/skills.js";
 import { isSafePublicUrl } from "./tools/web.js";
+import { QwenTts } from "./tts/qwentts.js";
 
 test("meme explanation parser normalizes valid structured output", () => {
   assert.deepEqual(
@@ -211,26 +212,55 @@ test("mono float audio becomes stereo PCM", () => {
   assert.equal(pcm.readInt16LE(0), pcm.readInt16LE(2));
 });
 
-test("Qwen PCM WAV chunks decode to mono float audio", () => {
-  const wav = Buffer.alloc(48);
-  wav.write("RIFF", 0);
-  wav.writeUInt32LE(40, 4);
-  wav.write("WAVEfmt ", 8);
-  wav.writeUInt32LE(16, 16);
-  wav.writeUInt16LE(1, 20);
-  wav.writeUInt16LE(1, 22);
-  wav.writeUInt32LE(24_000, 24);
-  wav.writeUInt32LE(48_000, 28);
-  wav.writeUInt16LE(2, 32);
-  wav.writeUInt16LE(16, 34);
-  wav.write("data", 36);
-  wav.writeUInt32LE(4, 40);
-  wav.writeInt16LE(-32_768, 44);
-  wav.writeInt16LE(16_384, 46);
+test("Qwen raw PCM decodes to mono float audio", () => {
+  const pcm = Buffer.alloc(4);
+  pcm.writeInt16LE(-32_768, 0);
+  pcm.writeInt16LE(16_384, 2);
+  assert.deepEqual([...pcm16MonoToFloat(pcm)], [-1, 0.5]);
+  assert.throws(() => pcm16MonoToFloat(Buffer.alloc(1)), /invalid mono PCM size/u);
+});
 
-  const decoded = pcm16MonoWavToFloat(wav);
-  assert.equal(decoded.sampleRate, 24_000);
-  assert.deepEqual([...decoded.samples], [-1, 0.5]);
+test("Qwen TTS streams OpenAI-compatible PCM with Basic Auth", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousBaseUrl = process.env["QWEN_TTS_BASE_URL"];
+  process.env["QWEN_TTS_BASE_URL"] = "https://qwen:p%40ss@tts.example/v1";
+  try {
+    const pcm = Buffer.alloc(4);
+    pcm.writeInt16LE(16_384, 0);
+    pcm.writeInt16LE(-16_384, 2);
+    globalThis.fetch = (async (input, init) => {
+      assert.equal(input, "https://tts.example/v1/audio/speech");
+      assert.equal(
+        new Headers(init?.headers).get("Authorization"),
+        `Basic ${Buffer.from("qwen:p@ss").toString("base64")}`,
+      );
+      assert.deepEqual(JSON.parse(String(init?.body)), {
+        input: "Привет!",
+        model: "tts-1",
+        voice: "keltuzad",
+        response_format: "pcm",
+      });
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(pcm.subarray(0, 1));
+            controller.enqueue(pcm.subarray(1));
+            controller.close();
+          },
+        }),
+      );
+    }) as typeof fetch;
+
+    const audio = (await QwenTts.create()).synthesize("Привет!");
+    const chunks: Buffer[] = [];
+    audio.stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+    assert.equal(await audio.done, 2 / 24_000);
+    assert.ok(Buffer.concat(chunks).length > 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousBaseUrl === undefined) delete process.env["QWEN_TTS_BASE_URL"];
+    else process.env["QWEN_TTS_BASE_URL"] = previousBaseUrl;
+  }
 });
 
 test("web tools reject local URLs and validate arguments", async () => {

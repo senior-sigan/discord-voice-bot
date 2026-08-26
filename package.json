@@ -10,6 +10,7 @@
     "start": "npm run build && node --env-file=.env dist/main.js",
     "start:select": "npm run build && node --env-file=.env dist/main.js --select-model",
     "ai:login": "pi-ai login openai-codex",
+    "generate-fillers": "npm run build && node --env-file=.env dist/scripts/generate-fillers.js",
     "export-memes": "npm run build && node --env-file=.env dist/scripts/export-memes.js",
     "explain-memes": "npm run build && node --env-file=.env dist/scripts/explain-memes.js",
     "test": "npm run build && node --test dist/main.test.js",
