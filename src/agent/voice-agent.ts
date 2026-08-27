@@ -1,6 +1,7 @@
 import type { GeneratedAudio } from "sherpa-onnx-node";
 
 import { errorMessage, log } from "../common.js";
+import type { AppConfig } from "../config.js";
 import type { Transcript } from "../stt/index.js";
 import type { Tts, VoiceAudio } from "../tts/index.js";
 import {
@@ -26,13 +27,13 @@ export class VoiceAgent {
     private readonly runtime: AgentRuntime,
     private readonly history: HistoryStore,
     private readonly tts: Tts,
-    private readonly fillers: readonly [GeneratedAudio, ...GeneratedAudio[]],
+    private readonly fillers: () => readonly [GeneratedAudio, ...GeneratedAudio[]],
     private readonly speak: (guildId: string, audio: VoiceAudio) => Promise<void>,
     private readonly stopSpeaking: (guildId: string) => void,
-    private autoParticipationMode: AutoParticipationMode,
+    private readonly config: AppConfig,
     private readonly isVoiceQuiet: (guildId: string) => boolean,
   ) {
-    log("info", "auto participation configured", { mode: autoParticipationMode });
+    log("info", "auto participation configured", { mode: config.settings.agent.auto_participation.mode });
   }
 
   onTranscript(transcript: Transcript): void {
@@ -72,7 +73,7 @@ export class VoiceAgent {
     }
 
     const now = Date.now();
-    const cooldown = Math.max(0, Number(process.env["WAKE_COOLDOWN_MS"] ?? 5_000) || 5_000);
+    const cooldown = this.config.settings.agent.wake_cooldown_ms;
     if (this.responding.has(transcript.guildId) || now - (this.lastWakeAt.get(transcript.guildId) ?? 0) < cooldown) {
       return;
     }
@@ -80,7 +81,8 @@ export class VoiceAgent {
     this.generations.set(transcript.guildId, generation);
     this.responding.add(transcript.guildId);
     this.lastWakeAt.set(transcript.guildId, now);
-    const filler = this.fillers.at(Math.floor(Math.random() * this.fillers.length)) ?? this.fillers[0];
+    const fillers = this.fillers();
+    const filler = fillers.at(Math.floor(Math.random() * fillers.length)) ?? fillers[0];
     void this.speak(transcript.guildId, filler).catch((error: unknown) => {
       log("error", "filler playback failed", { error: errorMessage(error) });
     });
@@ -116,7 +118,7 @@ export class VoiceAgent {
   }
 
   private contextFor(history: HistoryEntry[], since = Number.NEGATIVE_INFINITY): string {
-    const limit = Math.max(1_000, Number(process.env["LLM_CONTEXT_CHARS"] ?? 12_000) || 12_000);
+    const limit = this.config.settings.agent.context_chars;
     const lines: string[] = [];
     let length = 0;
     for (const entry of history.toReversed()) {
@@ -168,7 +170,7 @@ export class VoiceAgent {
   }
 
   private setAutoParticipationMode(transcript: Transcript, mode: AutoParticipationMode): void {
-    this.autoParticipationMode = mode;
+    this.config.setOverride("agent.auto_participation.mode", mode);
     const text =
       mode === "on"
         ? "Автоматическое участие включено."
@@ -183,14 +185,13 @@ export class VoiceAgent {
   }
 
   private scheduleAutoParticipation(guildId: string, version: number): void {
-    if (this.autoParticipationMode === "off" || this.responding.has(guildId)) return;
+    const settings = this.config.settings.agent.auto_participation;
+    if (settings.mode === "off" || this.responding.has(guildId)) return;
     const now = Date.now();
     const delay = Math.max(
-      environmentDelay("AUTO_PARTICIPATION_SILENCE_MS", 4_000),
-      environmentDelay("AUTO_PARTICIPATION_CHECK_INTERVAL_MS", 15_000) -
-        (now - (this.lastAutoParticipationCheckAt.get(guildId) ?? 0)),
-      environmentDelay("AUTO_PARTICIPATION_COOLDOWN_MS", 120_000) -
-        (now - (this.lastAutoParticipationResponseAt.get(guildId) ?? 0)),
+      settings.silence_ms,
+      settings.check_interval_ms - (now - (this.lastAutoParticipationCheckAt.get(guildId) ?? 0)),
+      settings.cooldown_ms - (now - (this.lastAutoParticipationResponseAt.get(guildId) ?? 0)),
     );
     const timer = setTimeout(() => {
       this.autoParticipationTimers.delete(guildId);
@@ -209,7 +210,8 @@ export class VoiceAgent {
   }
 
   private async considerAutoParticipation(guildId: string, version: number): Promise<void> {
-    const mode = this.autoParticipationMode;
+    const settings = this.config.settings.agent.auto_participation;
+    const mode = settings.mode;
     if (
       mode === "off" ||
       this.conversationVersions.get(guildId) !== version ||
@@ -219,10 +221,7 @@ export class VoiceAgent {
       return;
     }
     this.lastAutoParticipationCheckAt.set(guildId, Date.now());
-    const context = this.contextFor(
-      this.history.entries,
-      Date.now() - environmentDelay("AUTO_PARTICIPATION_CONTEXT_MS", 300_000),
-    );
+    const context = this.contextFor(this.history.entries, Date.now() - settings.context_ms);
     let verdict: AutoParticipationVerdict;
     try {
       verdict = await this.runtime.decideAutoParticipation(context);
@@ -296,14 +295,9 @@ export class VoiceAgent {
     mode: AutoParticipationMode,
   ): "conversation_changed" | "mode_changed" | "speech_started" | "busy" | undefined {
     if (this.conversationVersions.get(guildId) !== version) return "conversation_changed";
-    if (this.autoParticipationMode !== mode) return "mode_changed";
+    if (this.config.settings.agent.auto_participation.mode !== mode) return "mode_changed";
     if (this.responding.has(guildId)) return "busy";
     if (!this.isVoiceQuiet(guildId)) return "speech_started";
     return undefined;
   }
-}
-
-function environmentDelay(name: string, fallback: number): number {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value >= 0 ? value : fallback;
 }

@@ -6,7 +6,8 @@ import sherpa from "sherpa-onnx-node";
 
 import { stereoPcmToMono } from "../audio.js";
 import { errorMessage } from "../common.js";
-import { createTts } from "../tts/index.js";
+import { loadConfig } from "../config.js";
+import { createTts, fillerDirectory, type Tts } from "../tts/index.js";
 
 const FILLERS = [
   ["01-hm-seychas.wav", "Хм, сейчас."],
@@ -18,8 +19,17 @@ const FILLERS = [
 ] as const;
 
 async function run(): Promise<void> {
-  const directory = process.env["FILLER_DIR"] ?? "assets/fillers";
-  const tts = await createTts(process.env["TTS_MODEL_DIR"] ?? "models/vits-piper-ru_RU-ruslan-medium");
+  const config = loadConfig();
+  if (config.settings.tts.backend === "qwen") {
+    for (const voice of config.settings.tts.qwen.voices) {
+      await generate(await createTts(config, voice), fillerDirectory(config, voice));
+    }
+    return;
+  }
+  await generate(await createTts(config), fillerDirectory(config));
+}
+
+async function generate(tts: Tts, directory: string): Promise<void> {
   mkdirSync(directory, { recursive: true });
 
   for (const [file, text] of FILLERS) {

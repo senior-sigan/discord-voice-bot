@@ -20,7 +20,12 @@ export class ParakeetTranscriber implements Transcriber {
     private readonly vad: VadType,
   ) {}
 
-  static async create(modelDir: string, vadModel: string, vadThreshold: number): Promise<ParakeetTranscriber> {
+  static async create(
+    modelDir: string,
+    vadModel: string,
+    vadThreshold: number,
+    threads: number,
+  ): Promise<ParakeetTranscriber> {
     const files = ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"];
     for (const file of files) {
       const path = `${modelDir}/${file}`;
@@ -38,7 +43,7 @@ export class ParakeetTranscriber implements Transcriber {
           joiner: `${modelDir}/joiner.int8.onnx`,
         },
         tokens: `${modelDir}/tokens.txt`,
-        numThreads: Number(process.env["STT_THREADS"] ?? 2),
+        numThreads: threads,
         provider: "cpu",
         modelType: "nemo_transducer",
       },

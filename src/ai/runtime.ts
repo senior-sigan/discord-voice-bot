@@ -16,7 +16,7 @@ export interface AiRuntime {
 
 export async function createAiRuntime(config: AppConfig, interactive: boolean): Promise<AiRuntime> {
   if (!interactive) {
-    const provider = normalizeProvider(config.aiProvider);
+    const provider = config.settings.ai.provider;
     return provider === "openai-codex" ? setupOpenAiCodex(config) : setupOpenAiCompatible(config);
   }
 
@@ -34,15 +34,6 @@ export async function createAiRuntime(config: AppConfig, interactive: boolean): 
   }
 }
 
-function normalizeProvider(value: string): AiProviderId {
-  const provider = value.trim().toLowerCase();
-  if (provider === "openai-codex") return provider;
-  if (provider === "openai-compatible" || provider === "lm-studio" || provider === "lmstudio") {
-    return "openai-compatible";
-  }
-  throw new Error(`Unsupported AI_PROVIDER: ${value}`);
-}
-
 async function setupOpenAiCodex(config: AppConfig, prompt?: ConsolePrompter): Promise<AiRuntime> {
   const models = createModels({ credentials: new JsonCredentialStore(config.aiAuthFile) });
   models.setProvider(openaiCodexProvider());
@@ -52,14 +43,15 @@ async function setupOpenAiCodex(config: AppConfig, prompt?: ConsolePrompter): Pr
     }
     await models.login("openai-codex", "oauth", prompt.authInteraction());
   }
-  const model = await chooseModel(models, "openai-codex", config.aiModel ?? "gpt-5.6-terra", prompt);
+  const configured = config.settings.ai.model === "auto" ? "gpt-5.6-terra" : config.settings.ai.model;
+  const model = await chooseModel(models, "openai-codex", configured, prompt);
   log("info", "AI model selected", { provider: model.provider, model: model.id });
   return { models, model };
 }
 
 async function setupOpenAiCompatible(config: AppConfig, prompt?: ConsolePrompter): Promise<AiRuntime> {
   const discovered = await discoverOpenAiCompatibleModels(
-    config.openAiCompatibleBaseUrl,
+    config.settings.ai.openai_compatible.base_url,
     config.openAiCompatibleApiKey,
   );
   const catalog = discovered.map(
@@ -68,13 +60,13 @@ async function setupOpenAiCompatible(config: AppConfig, prompt?: ConsolePrompter
       name: id,
       api: "openai-completions",
       provider: "openai-compatible",
-      baseUrl: config.openAiCompatibleBaseUrl,
+      baseUrl: config.settings.ai.openai_compatible.base_url,
       reasoning: /(?:qwen.?3|deepseek.?r1|gpt-oss)/iu.test(id),
       thinkingLevelMap: { off: "none" },
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: config.aiContextWindow,
-      maxTokens: config.aiMaxTokens,
+      contextWindow: config.settings.ai.openai_compatible.context_window,
+      maxTokens: config.settings.ai.openai_compatible.max_tokens,
       compat: {
         supportsDeveloperRole: false,
         supportsReasoningEffort: true,
@@ -86,7 +78,7 @@ async function setupOpenAiCompatible(config: AppConfig, prompt?: ConsolePrompter
   const provider = createProvider({
     id: "openai-compatible",
     name: "OpenAI-compatible",
-    baseUrl: config.openAiCompatibleBaseUrl,
+    baseUrl: config.settings.ai.openai_compatible.base_url,
     auth: {
       apiKey: {
         name: "OpenAI-compatible API key",
@@ -100,11 +92,12 @@ async function setupOpenAiCompatible(config: AppConfig, prompt?: ConsolePrompter
   });
   const models = createModels();
   models.setProvider(provider);
-  const model = await chooseModel(models, "openai-compatible", config.aiModel ?? discovered[0], prompt);
+  const configured = config.settings.ai.model === "auto" ? discovered[0] : config.settings.ai.model;
+  const model = await chooseModel(models, "openai-compatible", configured, prompt);
   log("info", "AI model selected", {
     provider: model.provider,
     model: model.id,
-    base_url: config.openAiCompatibleBaseUrl,
+    base_url: config.settings.ai.openai_compatible.base_url,
   });
   return { models, model };
 }

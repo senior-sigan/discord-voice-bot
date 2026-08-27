@@ -13,7 +13,7 @@ const { LinearResampler, OfflineTts } = sherpa;
 export class PiperTts implements Tts {
   private constructor(private readonly tts: OfflineTtsType) {}
 
-  static async create(modelDir: string): Promise<PiperTts> {
+  static async create(modelDir: string, threads: number): Promise<PiperTts> {
     const model = `${modelDir}/ru_RU-ruslan-medium.onnx`;
     const tokens = `${modelDir}/tokens.txt`;
     const dataDir = `${modelDir}/espeak-ng-data`;
@@ -23,7 +23,7 @@ export class PiperTts implements Tts {
     log("info", "loading Russian TTS", { model_dir: modelDir });
     const tts = await OfflineTts.createAsync({
       model: { vits: { model, tokens, dataDir } },
-      numThreads: Number(process.env["TTS_THREADS"] ?? 2),
+      numThreads: threads,
       provider: "cpu",
     });
     log("info", "TTS initialized", { provider: "cpu", voice: "ru_RU-ruslan-medium" });

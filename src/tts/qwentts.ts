@@ -4,6 +4,7 @@ import sherpa from "sherpa-onnx-node";
 
 import { floatMonoToStereoPcm, pcm16MonoToFloat } from "../audio.js";
 import { errorMessage, log } from "../common.js";
+import type { RuntimeSettings } from "../config.js";
 import { spokenText } from "./text.js";
 import type { StreamingAudio, Tts } from "./types.js";
 
@@ -11,46 +12,24 @@ const { LinearResampler } = sherpa;
 
 export class QwenTts implements Tts {
   private constructor(
-    private readonly endpoint: string,
+    private readonly settings: () => RuntimeSettings["tts"]["qwen"],
     private readonly authorization: string | undefined,
-    private readonly model: string,
-    private readonly voice: string,
-    private readonly sampleRate: number,
   ) {}
 
-  static async create(): Promise<QwenTts> {
-    const url = new URL(process.env["QWEN_TTS_BASE_URL"] ?? "http://127.0.0.1:8000");
-    const basicAuth =
-      url.username || url.password
-        ? `Basic ${Buffer.from(`${decodeURIComponent(url.username)}:${decodeURIComponent(url.password)}`).toString("base64")}`
-        : undefined;
-    url.username = "";
-    url.password = "";
-    const path = url.pathname.replace(/\/+$/, "");
-    url.pathname = path.endsWith("/v1/audio/speech")
-      ? path
-      : path.endsWith("/v1")
-        ? `${path}/audio/speech`
-        : `${path}/v1/audio/speech`;
-
-    const sampleRate = Number(process.env["QWEN_TTS_SAMPLE_RATE"] ?? 24_000);
-    if (!Number.isInteger(sampleRate) || sampleRate <= 0) {
-      throw new Error("QWEN_TTS_SAMPLE_RATE must be a positive integer");
-    }
-    const model = process.env["QWEN_TTS_MODEL"] ?? "tts-1";
-    const voice = process.env["QWEN_TTS_VOICE"] ?? "keltuzad";
-    const apiKey = process.env["QWEN_TTS_API_KEY"];
-    log("info", "TTS initialized", { provider: "qwen", model, voice, endpoint: url.toString() });
-    return new QwenTts(
-      url.toString(),
-      basicAuth ?? (apiKey ? `Bearer ${apiKey}` : undefined),
-      model,
-      voice,
-      sampleRate,
-    );
+  static async create(settings: () => RuntimeSettings["tts"]["qwen"], authorization?: string): Promise<QwenTts> {
+    const current = settings();
+    log("info", "TTS initialized", {
+      provider: "qwen",
+      model: current.model,
+      voice: current.voice,
+      endpoint: speechEndpoint(current.base_url),
+    });
+    return new QwenTts(settings, authorization);
   }
 
   synthesize(text: string): StreamingAudio {
+    const settings = this.settings();
+    const endpoint = speechEndpoint(settings.base_url);
     const input = spokenText(text);
     const stream = new PassThrough();
     stream.on("error", () => undefined);
@@ -60,17 +39,17 @@ export class QwenTts implements Tts {
 
     const done = (async () => {
       const started = performance.now();
-      const resampler = new LinearResampler(this.sampleRate, 48_000);
+      const resampler = new LinearResampler(settings.sample_rate, 48_000);
       let pending = Buffer.alloc(0);
       let startedSpeaking = false;
       try {
-        const response = await fetch(this.endpoint, {
+        const response = await fetch(endpoint, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             ...(this.authorization ? { Authorization: this.authorization } : {}),
           },
-          body: JSON.stringify({ input, model: this.model, voice: this.voice, response_format: "pcm" }),
+          body: JSON.stringify({ input, model: settings.model, voice: settings.voice, response_format: "pcm" }),
           signal: abort.signal,
         });
         if (!response.ok) {
@@ -112,7 +91,7 @@ export class QwenTts implements Tts {
         if (!stream.destroyed) stream.end();
       }
 
-      const duration = sampleCount / this.sampleRate;
+      const duration = sampleCount / settings.sample_rate;
       if (!cancelled) {
         log("info", "speech synthesized", {
           provider: "qwen",
@@ -133,4 +112,15 @@ export class QwenTts implements Tts {
       },
     };
   }
+}
+
+function speechEndpoint(baseUrl: string): string {
+  const url = new URL(baseUrl);
+  const path = url.pathname.replace(/\/+$/, "");
+  url.pathname = path.endsWith("/v1/audio/speech")
+    ? path
+    : path.endsWith("/v1")
+      ? `${path}/audio/speech`
+      : `${path}/v1/audio/speech`;
+  return url.toString();
 }

@@ -91,12 +91,6 @@ export function autoParticipationCommand(text: string): AutoParticipationMode | 
   return /включ\p{L}*/iu.test(text) ? "on" : undefined;
 }
 
-export function configuredAutoParticipationMode(value: string | undefined): AutoParticipationMode {
-  const mode = (value ?? "off").trim().toLocaleLowerCase("en-US");
-  if (MODES.includes(mode as AutoParticipationMode)) return mode as AutoParticipationMode;
-  throw new Error("AUTO_PARTICIPATION_MODE must be off, shadow or on");
-}
-
 export function isAutoParticipationDecisionRecord(value: unknown): value is AutoParticipationDecisionRecord {
   if (!isRecord(value)) return false;
   const reason = value["reason"];

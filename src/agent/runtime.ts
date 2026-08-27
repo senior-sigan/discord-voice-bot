@@ -5,6 +5,7 @@ import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import { contentText } from "@earendil-works/pi-ai";
 
 import { errorMessage, log } from "../common.js";
+import type { AppConfig } from "../config.js";
 import {
   AUTO_PARTICIPATION_PROMPT,
   AUTO_PARTICIPATION_TOOL,
@@ -23,6 +24,7 @@ export class AgentRuntime {
   private completionQueue: Promise<void> = Promise.resolve();
   private onToolCall: ToolCallListener | undefined;
   private latestAssistantText = "";
+  private model: Model<Api>;
 
   get modelName(): string {
     return `${this.model.provider}/${this.model.id}`;
@@ -30,11 +32,13 @@ export class AgentRuntime {
 
   constructor(
     private readonly models: Models,
-    private readonly model: Model<Api>,
+    model: Model<Api>,
     tools: AgentTool[],
     private readonly history: HistoryStore,
     private readonly skills: SkillStore,
+    private readonly config: AppConfig,
   ) {
+    this.model = model;
     this.agent = new Agent({
       initialState: {
         systemPrompt: this.systemPrompt(),
@@ -47,6 +51,32 @@ export class AgentRuntime {
       toolExecution: "parallel",
     });
     this.agent.subscribe((event) => this.handleEvent(event));
+  }
+
+  switchModel(requested: string): { provider: string; model: string } {
+    const available = this.models.getModels(this.model.provider);
+    const exact = available.find((candidate) => candidate.id.toLowerCase() === requested.trim().toLowerCase());
+    const tokens = requested
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((token) => token && token !== "model" && token !== "модель");
+    const matches = exact
+      ? [exact]
+      : available.filter(
+          (candidate) => tokens.length && tokens.every((token) => candidate.id.toLowerCase().includes(token)),
+        );
+    if (matches.length !== 1) {
+      throw new Error(
+        `Model '${requested}' is ${matches.length ? "ambiguous" : "not available"}. Available: ${available.map((model) => model.id).join(", ")}`,
+      );
+    }
+    const selected = matches[0];
+    if (!selected) throw new Error("Model selection failed");
+    this.config.setOverride("ai.model", selected.id);
+    this.model = selected;
+    this.agent.state.model = selected;
+    log("info", "AI model switched", { provider: selected.provider, model: selected.id });
+    return { provider: selected.provider, model: selected.id };
   }
 
   complete(context: string, onToolCall?: ToolCallListener): Promise<string> {

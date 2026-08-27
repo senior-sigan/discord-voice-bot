@@ -23,28 +23,29 @@ async function run(): Promise<void> {
   const skills = new SkillStore();
   await skills.load();
   const ai = await createAiRuntime(config, process.argv.includes("--select-model"));
-  const tts = await createTts(config.ttsModelDir);
-  const transcriber = await ParakeetTranscriber.create(config.sttModelDir, config.vadModel, config.vadThreshold);
-  const discord = new DiscordBot(config.discordToken, config.discordGuildId, transcriber);
+  const tts = await createTts(config);
+  const { stt } = config.settings;
+  const transcriber = await ParakeetTranscriber.create(stt.model_dir, stt.vad_model, stt.vad_threshold, stt.threads);
+  const guildId = config.settings.discord.guild_id;
+  if (!guildId) throw new Error("Set defaults.discord.guild_id in config.json");
+  const discord = new DiscordBot(config.discordToken, guildId, transcriber);
   let voiceAgent: VoiceAgent;
   const scheduler = new TaskScheduler(config.tasksFile, (task) =>
-    voiceAgent.runScheduledTask(config.discordGuildId, task.instruction),
+    voiceAgent.runScheduledTask(guildId, task.instruction),
   );
-  const agentRuntime = new AgentRuntime(
-    ai.models,
-    ai.model,
-    createTools(history, memory, profiles, skills, discord, scheduler, config.timezone),
-    history,
-    skills,
+  let agentRuntime: AgentRuntime;
+  const tools = createTools(history, memory, profiles, skills, discord, scheduler, config, (model) =>
+    agentRuntime.switchModel(model),
   );
+  agentRuntime = new AgentRuntime(ai.models, ai.model, tools, history, skills, config);
   voiceAgent = new VoiceAgent(
     agentRuntime,
     history,
     tts,
-    loadFillers(config.fillerDir),
+    loadFillers(config),
     (guildId, audio) => discord.speak(guildId, audio),
     (guildId) => discord.interrupt(guildId),
-    config.autoParticipationMode,
+    config,
     (guildId) => discord.isVoiceQuiet(guildId),
   );
   discord.setAgent(voiceAgent);

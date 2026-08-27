@@ -14,7 +14,7 @@ import type {
 import { ChannelType, REST, Routes } from "discord.js";
 
 import { isRecord } from "../common.js";
-import { dataPath } from "../config.js";
+import { dataPath, loadConfig } from "../config.js";
 
 const OUTPUT_DIR = dataPath("memes");
 const IMAGE_DIR = join(OUTPUT_DIR, "images");
@@ -200,9 +200,10 @@ async function exportChannel(
 }
 
 async function main(): Promise<void> {
-  const token = process.env["DISCORD_TOKEN"];
-  const guildId = process.env["DISCORD_GUILD_ID"];
-  if (!token || !guildId) throw new Error("DISCORD_TOKEN and DISCORD_GUILD_ID are required");
+  const config = loadConfig();
+  const token = config.discordToken;
+  const guildId = config.settings.discord.guild_id;
+  if (!guildId) throw new Error("Set defaults.discord.guild_id in config.json");
 
   const filter = process.argv[2];
   const rest = new REST({ version: "10" }).setToken(token);

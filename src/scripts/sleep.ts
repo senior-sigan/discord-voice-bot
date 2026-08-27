@@ -12,7 +12,7 @@ import type { PersonProfile, ProfileClaim } from "../agent/profiles.js";
 import { emptyProfileSections, PROFILE_SECTIONS, ProfileStore } from "../agent/profiles.js";
 import { createAiRuntime } from "../ai/runtime.js";
 import { isRecord } from "../common.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, type RuntimeSettings } from "../config.js";
 
 const PROMPT_VERSION = "sleep-v2";
 const PROFILE_PROMPT_VERSION = "profile-v1";
@@ -318,7 +318,11 @@ function isMemoryKind(value: unknown): value is MemoryKind {
   return ["person", "topic", "story", "moment", "activity", "summary"].includes(String(value));
 }
 
-async function propose(ai: Awaited<ReturnType<typeof createAiRuntime>>, material: string): Promise<unknown> {
+async function propose(
+  ai: Awaited<ReturnType<typeof createAiRuntime>>,
+  material: string,
+  maxTokens: number,
+): Promise<unknown> {
   for (let attempt = 1; attempt <= 3; attempt++) {
     const response = await ai.models.completeSimple(
       ai.model,
@@ -329,7 +333,7 @@ async function propose(ai: Awaited<ReturnType<typeof createAiRuntime>>, material
       },
       {
         reasoning: "medium",
-        maxTokens: Math.max(1_024, Number(process.env["SLEEP_MAX_TOKENS"] ?? 8_192) || 8_192),
+        maxTokens,
         timeoutMs: 600_000,
         sessionId: randomUUID(),
       },
@@ -351,7 +355,11 @@ export function structuredMemoryPayload(
   return call?.type === "toolCall" ? call.arguments : undefined;
 }
 
-async function proposeProfile(ai: Awaited<ReturnType<typeof createAiRuntime>>, material: string): Promise<unknown> {
+async function proposeProfile(
+  ai: Awaited<ReturnType<typeof createAiRuntime>>,
+  material: string,
+  maxTokens: number,
+): Promise<unknown> {
   for (let attempt = 1; attempt <= 3; attempt++) {
     const response = await ai.models.completeSimple(
       ai.model,
@@ -362,7 +370,7 @@ async function proposeProfile(ai: Awaited<ReturnType<typeof createAiRuntime>>, m
       },
       {
         reasoning: "medium",
-        maxTokens: Math.max(1_024, Number(process.env["SLEEP_MAX_TOKENS"] ?? 8_192) || 8_192),
+        maxTokens,
         timeoutMs: 600_000,
         sessionId: randomUUID(),
       },
@@ -494,10 +502,10 @@ async function reflectDay(
   ai: Awaited<ReturnType<typeof createAiRuntime>>,
   entries: HistoryEntry[],
   day: string,
+  settings: RuntimeSettings["sleep"],
 ): Promise<{ memories: ReflectionMemoryInput[]; rejected: string[] }> {
   const participants = participantCatalog(entries);
-  const configuredChunkChars = Number(process.env["SLEEP_CHUNK_CHARS"] ?? DEFAULT_CHUNK_CHARS);
-  const chunks = hourlyChunks(entries, Math.max(5_000, configuredChunkChars || DEFAULT_CHUNK_CHARS));
+  const chunks = hourlyChunks(entries, settings.chunk_chars);
   const proposals: ReflectionMemoryInput[] = [];
   const rejected: string[] = [];
   for (const [index, chunk] of chunks.entries()) {
@@ -516,6 +524,7 @@ ${participants}
 
 Транскрипт:
 ${chunk.map(transcriptLine).join("\n")}`,
+      settings.max_tokens,
     );
     const validated = validateProposals(payload, entries, day);
     proposals.push(...validated.accepted);
@@ -537,6 +546,7 @@ ${participants}
 
 Кандидаты:
 ${JSON.stringify(proposals.map(proposalJson))}`,
+    settings.max_tokens,
   );
   const consolidated = validateProposals(payload, entries, day);
   return { memories: consolidated.accepted, rejected: [...rejected, ...consolidated.rejected] };
@@ -547,6 +557,7 @@ async function reflectProfile(
   entries: HistoryEntry[],
   id: string,
   name: string,
+  maxTokens: number,
 ): Promise<{ profile: PersonProfile; rejected: string[] }> {
   const candidates: PersonProfile[] = [];
   const rejected: string[] = [];
@@ -561,6 +572,7 @@ async function reflectProfile(
 
 Транскрипт только этого участника:
 ${chunk.map(transcriptLine).join("\n")}`,
+      maxTokens,
     );
     const validated = validateProfileProposal(payload, entries, id, name);
     candidates.push(validated.profile);
@@ -582,6 +594,7 @@ ${chunk.map(transcriptLine).join("\n")}`,
 
 Кандидаты:
 ${JSON.stringify(candidates.map(profileCandidateJson))}`,
+    maxTokens,
   );
   const consolidated = validateProfileProposal(payload, entries, id, name);
   return { profile: consolidated.profile, rejected: [...rejected, ...consolidated.rejected] };
@@ -591,6 +604,7 @@ async function reflectTopics(
   ai: Awaited<ReturnType<typeof createAiRuntime>>,
   sources: HistoryEntry[],
   candidates: ReflectionMemoryInput[],
+  maxTokens: number,
 ): Promise<{ memories: ReflectionMemoryInput[]; rejected: string[] }> {
   console.log(`[topics] consolidating ${candidates.length} candidates`);
   const payload = await propose(
@@ -603,6 +617,7 @@ ${participantCatalog(sources)}
 
 Дневные кандидаты:
 ${JSON.stringify(candidates.map(proposalJson))}`,
+    maxTokens,
   );
   const validated = validateProposals(payload, sources, "all");
   return {
@@ -742,7 +757,7 @@ async function main(): Promise<void> {
         console.log(`[${day}] already processed`);
         continue;
       }
-      const result = await reflectDay(ai, entries, day);
+      const result = await reflectDay(ai, entries, day, config.settings.sleep);
       const saved = saveMemories(memory, result.memories);
       state[day] = { hash, model: ai.model.id, processed_at: new Date().toISOString(), memories: saved };
       saveState(statePath, state);
@@ -758,7 +773,13 @@ async function main(): Promise<void> {
         console.log(`[profile ${participant.name}] already processed`);
         continue;
       }
-      const result = await reflectProfile(ai, participant.entries, id, participant.name);
+      const result = await reflectProfile(
+        ai,
+        participant.entries,
+        id,
+        participant.name,
+        config.settings.sleep.max_tokens,
+      );
       profiles.upsert(result.profile);
       const saved = PROFILE_SECTIONS.reduce((count, section) => count + result.profile.sections[section].length, 0);
       state[key] = { hash, model: ai.model.id, processed_at: new Date().toISOString(), memories: saved };
@@ -772,7 +793,12 @@ async function main(): Promise<void> {
     if (state[topicKey]?.hash === topicHash) {
       console.log("[topics] already processed");
     } else {
-      const result = await reflectTopics(ai, transcripts, memoryCandidates(memory.entries, participants));
+      const result = await reflectTopics(
+        ai,
+        transcripts,
+        memoryCandidates(memory.entries, participants),
+        config.settings.sleep.max_tokens,
+      );
       const saved = saveMemories(memory, result.memories);
       state[topicKey] = {
         hash: topicHash,

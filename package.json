@@ -24,7 +24,8 @@
     "@earendil-works/pi-ai": "0.84.3",
     "croner": "10.0.1",
     "discord.js": "14.27.0",
-    "sherpa-onnx-node": "1.13.6"
+    "sherpa-onnx-node": "1.13.6",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",

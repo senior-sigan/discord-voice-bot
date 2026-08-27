@@ -12,12 +12,9 @@ import {
   fauxToolCall,
   validateToolCall,
 } from "@earendil-works/pi-ai";
+import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 
-import {
-  autoParticipationCommand,
-  configuredAutoParticipationMode,
-  parseAutoParticipationVerdict,
-} from "./agent/auto-participation.js";
+import { autoParticipationCommand, parseAutoParticipationVerdict } from "./agent/auto-participation.js";
 import { type HistoryEntry, HistoryStore, searchHistory } from "./agent/history.js";
 import { MemoryStore } from "./agent/memory.js";
 import { ProfileStore } from "./agent/profiles.js";
@@ -26,7 +23,7 @@ import { SkillStore } from "./agent/skills.js";
 import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/transcript.js";
 import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio.js";
 import { formatMessageTime } from "./common.js";
-import { dataPath } from "./config.js";
+import { AppConfig, dataPath } from "./config.js";
 import { TaskScheduler } from "./scheduler.js";
 import { isRetryableLlmError, parseExplanation, resizeImageForLlm } from "./scripts/explain-memes.js";
 import { imageFileName, isImageAttachment } from "./scripts/export-memes.js";
@@ -48,6 +45,7 @@ import { createRecallHistoryTool } from "./tools/recall.js";
 import { createSkillTools } from "./tools/skills.js";
 import { createTaskTools } from "./tools/tasks.js";
 import { isSafePublicUrl } from "./tools/web.js";
+import { fillerDirectory } from "./tts/index.js";
 import { QwenTts } from "./tts/qwentts.js";
 
 test("meme explanation parser normalizes valid structured output", () => {
@@ -164,9 +162,6 @@ test("automatic participation commands and decisions are strict", () => {
   assert.equal(autoParticipationCommand("Олег, выключи автоматическое участие"), "off");
   assert.equal(autoParticipationCommand("Олег, включи теневой режим автоматического участия"), "shadow");
   assert.equal(autoParticipationCommand("Олег, подключайся к разговору"), undefined);
-  assert.equal(configuredAutoParticipationMode(undefined), "off");
-  assert.equal(configuredAutoParticipationMode(" SHADOW "), "shadow");
-  assert.throws(() => configuredAutoParticipationMode("always"), /must be off, shadow or on/u);
   assert.deepEqual(
     parseAutoParticipationVerdict(
       { decision: "join", reason: "open_question", reply_intent: "Коротко ответить на вопрос" },
@@ -205,6 +200,47 @@ test("data path uses the configured data directory", () => {
   } finally {
     if (previous === undefined) delete process.env["DATA_DIR"];
     else process.env["DATA_DIR"] = previous;
+  }
+});
+
+test("config creates visible defaults and persists validated overrides", () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-config-"));
+  try {
+    const config = new AppConfig(directory, { discordToken: "test" });
+    const initial = JSON.parse(readFileSync(config.file, "utf8")) as {
+      defaults: {
+        agent: { filler_dir: string };
+        tts: { backend: "piper" | "qwen"; qwen: { base_url: string } };
+      };
+      overrides: unknown;
+    };
+    assert.ok(initial.defaults);
+    assert.deepEqual(initial.overrides, {});
+
+    config.setOverride("ai.model", "gpt-5.6-sol");
+    config.setOverride("tts.qwen.voice", "arthas");
+    config.setOverride("agent.auto_participation.mode", "shadow");
+    assert.throws(() => config.setOverride("agent.auto_participation.mode", "always"));
+
+    const reloaded = new AppConfig(directory, { discordToken: "test" });
+    assert.equal(reloaded.settings.ai.model, "gpt-5.6-sol");
+    assert.equal(reloaded.settings.tts.qwen.voice, "arthas");
+    assert.throws(() => config.setOverride("tts.qwen.voice", "unknown"), /listed in voices/u);
+    assert.equal(reloaded.settings.agent.auto_participation.mode, "shadow");
+
+    const qwenDocument = JSON.parse(readFileSync(config.file, "utf8")) as typeof initial;
+    qwenDocument.defaults.tts.backend = "qwen";
+    qwenDocument.defaults.agent.filler_dir = join(directory, "fillers");
+    writeFileSync(config.file, JSON.stringify(qwenDocument));
+    const qwenConfig = new AppConfig(directory, { discordToken: "test" });
+    assert.equal(fillerDirectory(qwenConfig, "arthas"), join(directory, "fillers", "qwen", "tts-1", "arthas"));
+
+    const invalid = structuredClone(qwenDocument);
+    invalid.defaults.tts.qwen.base_url = "https://user:password@tts.example";
+    writeFileSync(config.file, JSON.stringify(invalid));
+    assert.throws(() => new AppConfig(directory, { discordToken: "test" }), /credentials/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -277,8 +313,15 @@ test("Pi agent executes a tool and continues to the final answer", async () => {
       ),
       fauxAssistantMessage("Готово."),
     ]);
-    const runtime = new AgentRuntime(models, faux.getModel(), [currentDateTimeTool], history, skills);
+    const config = new AppConfig(directory, { discordToken: "test" });
+    const runtime = new AgentRuntime(models, faux.getModel(), [currentDateTimeTool], history, skills, config);
     const calls: string[] = [];
+
+    assert.deepEqual(runtime.switchModel(faux.getModel().id), {
+      provider: faux.getModel().provider,
+      model: faux.getModel().id,
+    });
+    assert.equal(config.settings.ai.model, faux.getModel().id);
 
     assert.equal(await runtime.complete("[10:00:00] Илья: Олег, который час?", (name) => calls.push(name)), "Готово.");
     assert.deepEqual(calls, ["get_current_datetime"]);
@@ -304,6 +347,12 @@ test("Pi agent executes a tool and continues to the final answer", async () => {
       replyIntent: "Назвать проверяемый факт",
       model: `${faux.getModel().provider}/${faux.getModel().id}`,
     });
+
+    models.setProvider(openaiCodexProvider());
+    const codexModel = models.getModel("openai-codex", "gpt-5.6-luna");
+    assert.ok(codexModel);
+    const switchingRuntime = new AgentRuntime(models, codexModel, [], history, skills, config);
+    assert.equal(switchingRuntime.switchModel("gpt-sol модель").model, "gpt-5.6-sol");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -356,8 +405,6 @@ test("Qwen raw PCM decodes to mono float audio", () => {
 
 test("Qwen TTS streams OpenAI-compatible PCM with Basic Auth", async () => {
   const previousFetch = globalThis.fetch;
-  const previousBaseUrl = process.env["QWEN_TTS_BASE_URL"];
-  process.env["QWEN_TTS_BASE_URL"] = "https://qwen:p%40ss@tts.example/v1";
   try {
     const pcm = Buffer.alloc(4);
     pcm.writeInt16LE(16_384, 0);
@@ -385,15 +432,23 @@ test("Qwen TTS streams OpenAI-compatible PCM with Basic Auth", async () => {
       );
     }) as typeof fetch;
 
-    const audio = (await QwenTts.create()).synthesize("Привет!");
+    const settings = {
+      base_url: "https://tts.example/v1",
+      sample_rate: 24_000,
+      model: "tts-1",
+      voice: "old-voice",
+      voices: ["old-voice", "keltuzad"],
+    };
+    const authorization = `Basic ${Buffer.from("qwen:p@ss").toString("base64")}`;
+    const tts = await QwenTts.create(() => settings, authorization);
+    settings.voice = "keltuzad";
+    const audio = tts.synthesize("Привет!");
     const chunks: Buffer[] = [];
     audio.stream.on("data", (chunk: Buffer) => chunks.push(chunk));
     assert.equal(await audio.done, 2 / 24_000);
     assert.ok(Buffer.concat(chunks).length > 0);
   } finally {
     globalThis.fetch = previousFetch;
-    if (previousBaseUrl === undefined) delete process.env["QWEN_TTS_BASE_URL"];
-    else process.env["QWEN_TTS_BASE_URL"] = previousBaseUrl;
   }
 });
 

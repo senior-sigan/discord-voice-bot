@@ -5,17 +5,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import { isRecord } from "../common.js";
-import { dataPath } from "../config.js";
+import { dataPath, loadConfig } from "../config.js";
 
 const MEMES_DIR = dataPath("memes");
 const INPUT_FILE = dataPath("memes", "images.jsonl");
 const OUTPUT_FILE = dataPath("memes", "images_explained.jsonl");
-const BASE_URL = (
-  process.env["MEME_LLM_BASE_URL"] ??
-  process.env["LLM_BASE_URL"] ??
-  "http://127.0.0.1:1234/v1"
-).replace(/\/$/, "");
-const MODEL = process.env["MEME_LLM_MODEL"] ?? "qwen/qwen3.6-35b-a3b";
 const SYSTEM_PROMPT = `Ты создаёшь поисковый каталог частной коллекции мемов из Discord.
 
 Проанализируй изображение как мем, чтобы другой агент позже мог найти подходящую картинку по ситуации, эмоции, персонажу, цитате или теме.
@@ -152,7 +146,10 @@ function responseText(body: unknown): string {
   return text;
 }
 
-async function explain(record: MemeRecord): Promise<MemeExplanation> {
+async function explain(
+  record: MemeRecord,
+  options: { baseUrl: string; model: string; apiKey?: string },
+): Promise<MemeExplanation> {
   const memesRoot = `${resolve(MEMES_DIR)}${sep}`;
   const imagePath = resolve(MEMES_DIR, record.path);
   if (!imagePath.startsWith(memesRoot)) throw new Error(`image path escapes memes directory: ${record.path}`);
@@ -160,9 +157,9 @@ async function explain(record: MemeRecord): Promise<MemeExplanation> {
   if (!mime.startsWith("image/")) throw new Error(`invalid image content type: ${mime}`);
   const image = resizeImageForLlm(imagePath);
   const headers: Record<string, string> = { "content-type": "application/json" };
-  if (process.env["LLM_API_KEY"]) headers["authorization"] = `Bearer ${process.env["LLM_API_KEY"]}`;
+  if (options.apiKey) headers["authorization"] = `Bearer ${options.apiKey}`;
   const body = JSON.stringify({
-    model: MODEL,
+    model: options.model,
     temperature: 0.2,
     max_tokens: 600,
     reasoning_effort: "none",
@@ -197,7 +194,7 @@ async function explain(record: MemeRecord): Promise<MemeExplanation> {
   for (let attempt = 1; attempt <= 4; attempt++) {
     let response: Response;
     try {
-      response = await fetch(`${BASE_URL}/chat/completions`, {
+      response = await fetch(`${options.baseUrl.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
         headers,
         signal: AbortSignal.timeout(300_000),
@@ -256,6 +253,12 @@ function completedPrefix(input: Array<{ raw: string; record: MemeRecord }>): num
 }
 
 async function main(): Promise<void> {
+  const config = loadConfig();
+  const options = {
+    baseUrl: config.settings.memes.llm_base_url,
+    model: config.settings.memes.llm_model,
+    ...(config.memeLlmApiKey ? { apiKey: config.memeLlmApiKey } : {}),
+  };
   const input = readFileSync(INPUT_FILE, "utf8")
     .split("\n")
     .flatMap((raw, index) => (raw.trim() ? [{ raw, record: parseRecord(raw, `${INPUT_FILE}:${index + 1}`) }] : []));
@@ -269,7 +272,7 @@ async function main(): Promise<void> {
     const index = completed + offset;
     console.log(`[${index + 1}/${input.length}]`);
     console.log(item.raw);
-    const explanation = await explain(item.record);
+    const explanation = await explain(item.record, options);
     console.log(JSON.stringify(explanation));
     appendFileSync(OUTPUT_FILE, `${JSON.stringify({ ...item.record, ...explanation })}\n`);
   }
