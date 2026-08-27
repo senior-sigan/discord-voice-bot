@@ -110,6 +110,11 @@ export class VoiceAgent {
     log("info", "scheduled task completed", { answer });
   }
 
+  async speakDirectly(guildId: string, text: string): Promise<void> {
+    await this.speak(guildId, this.tts.synthesize(text));
+    this.history.appendMessage("assistant", "Олег", text);
+  }
+
   onVoiceMemberJoined(guildId: string, userId: string, user: string, channel: string): void {
     this.history.appendVoiceMemberJoined(user, userId, channel);
     this.conversationVersions.set(guildId, (this.conversationVersions.get(guildId) ?? 0) + 1);

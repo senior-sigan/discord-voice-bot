@@ -70,6 +70,9 @@ const settingsSchema = z.strictObject({
     context_chars: positiveInteger.min(1_000),
     greet_on_join: z.boolean().default(true),
     follow_up_window_ms: nonNegativeInteger.default(30_000),
+    local_control: z
+      .strictObject({ enabled: z.boolean(), host: nonBlankString, port: positiveInteger.max(65_535) })
+      .default({ enabled: true, host: "127.0.0.1", port: 7_070 }),
     auto_participation: z.strictObject({
       mode: autoParticipationModeSchema,
       silence_ms: nonNegativeInteger,
@@ -141,6 +144,7 @@ const INITIAL_DEFAULTS: RuntimeSettings = {
     context_chars: 12_000,
     greet_on_join: true,
     follow_up_window_ms: 30_000,
+    local_control: { enabled: true, host: "127.0.0.1", port: 7_070 },
     auto_participation: {
       mode: "off",
       silence_ms: 1_500,

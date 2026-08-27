@@ -10,6 +10,7 @@ import { createAiRuntime } from "./ai/runtime.js";
 import { errorMessage, log } from "./common.js";
 import { loadConfig } from "./config.js";
 import { DiscordBot } from "./discord/bot.js";
+import { startLocalControlServer } from "./local-control.js";
 import { TaskScheduler } from "./scheduler.js";
 import { ParakeetTranscriber } from "./stt/index.js";
 import { createTools } from "./tools/index.js";
@@ -50,12 +51,14 @@ async function run(): Promise<void> {
   );
   discord.setAgent(voiceAgent);
 
+  let controlServer: Awaited<ReturnType<typeof startLocalControlServer>> | undefined;
   let shuttingDown = false;
   const shutdown = (signal: NodeJS.Signals): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     log("info", "shutting down", { signal });
     scheduler.stop();
+    controlServer?.close();
     void discord
       .stop()
       .catch((error: unknown) => log("error", "shutdown failed", { error: errorMessage(error) }))
@@ -64,6 +67,17 @@ async function run(): Promise<void> {
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   await discord.start(process.argv.includes("--autojoin") ? "master" : undefined);
+  const localControl = config.settings.agent.local_control;
+  if (localControl.enabled) {
+    try {
+      controlServer = await startLocalControlServer(localControl.host, localControl.port, (text) =>
+        voiceAgent.speakDirectly(guildId, text),
+      );
+    } catch (error) {
+      await discord.stop();
+      throw error;
+    }
+  }
   scheduler.start();
 }
 

@@ -27,6 +27,7 @@ import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio
 import { formatMessageTime } from "./common.js";
 import { AppConfig, dataPath } from "./config.js";
 import { enteredVoiceChannel } from "./discord/bot.js";
+import { startLocalControlServer } from "./local-control.js";
 import { TaskScheduler } from "./scheduler.js";
 import { isRetryableLlmError, parseExplanation, resizeImageForLlm } from "./scripts/explain-memes.js";
 import { imageFileName, isImageAttachment } from "./scripts/export-memes.js";
@@ -357,6 +358,7 @@ test("config creates visible defaults and persists validated overrides", () => {
     assert.deepEqual(initial.overrides, {});
     assert.equal(config.settings.agent.greet_on_join, true);
     assert.equal(config.settings.agent.follow_up_window_ms, 30_000);
+    assert.deepEqual(config.settings.agent.local_control, { enabled: true, host: "127.0.0.1", port: 7_070 });
     assert.deepEqual(config.settings.agent.auto_participation, {
       mode: "off",
       silence_ms: 1_500,
@@ -389,6 +391,34 @@ test("config creates visible defaults and persists validated overrides", () => {
     assert.throws(() => new AppConfig(directory, { discordToken: "test" }), /credentials/u);
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("local control server accepts valid speech requests", async () => {
+  const spoken: string[] = [];
+  const server = await startLocalControlServer("127.0.0.1", 0, async (text) => {
+    spoken.push(text);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("local control server has no TCP address");
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/speak`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "  Привет из Codex!  " }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(spoken, ["Привет из Codex!"]);
+
+    const invalid = await fetch(`http://127.0.0.1:${address.port}/speak`, {
+      method: "POST",
+      body: JSON.stringify({ text: "" }),
+    });
+    assert.equal(invalid.status, 400);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
   }
 });
 
