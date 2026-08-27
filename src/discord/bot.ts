@@ -18,7 +18,16 @@ import { DiscordVoiceSession } from "./voice-session.js";
 
 export interface DiscordAgent {
   onTranscript(transcript: Transcript): void;
+  onVoiceMemberJoined(guildId: string, userId: string, user: string, channel: string): void;
   clear(guildId: string): void;
+}
+
+export function enteredVoiceChannel(
+  oldChannelId: string | null,
+  newChannelId: string | null,
+  targetId: string,
+): boolean {
+  return oldChannelId !== targetId && newChannelId === targetId;
 }
 
 const voiceCommand = new SlashCommandBuilder()
@@ -57,6 +66,24 @@ export class DiscordBot {
     const ready = new Promise<Client<true>>((resolve) => this.client.once(Events.ClientReady, resolve));
     this.client.on(Events.InteractionCreate, (interaction) => {
       void this.handleInteraction(interaction);
+    });
+    this.client.on(Events.VoiceStateUpdate, (oldState, newState) => {
+      const targetId = this.captures.get(newState.guild.id)?.connection.joinConfig.channelId;
+      const member = newState.member;
+      if (
+        !targetId ||
+        !member ||
+        member.user.bot ||
+        !enteredVoiceChannel(oldState.channelId, newState.channelId, targetId)
+      ) {
+        return;
+      }
+      this.agent?.onVoiceMemberJoined(
+        newState.guild.id,
+        member.id,
+        member.displayName,
+        newState.channel?.name ?? targetId,
+      );
     });
     await this.client.login(this.token);
     const readyClient = await ready;

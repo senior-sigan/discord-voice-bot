@@ -24,6 +24,7 @@ import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/tra
 import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio.js";
 import { formatMessageTime } from "./common.js";
 import { AppConfig, dataPath } from "./config.js";
+import { enteredVoiceChannel } from "./discord/bot.js";
 import { TaskScheduler } from "./scheduler.js";
 import { isRetryableLlmError, parseExplanation, resizeImageForLlm } from "./scripts/explain-memes.js";
 import { imageFileName, isImageAttachment } from "./scripts/export-memes.js";
@@ -216,6 +217,7 @@ test("config creates visible defaults and persists validated overrides", () => {
     };
     assert.ok(initial.defaults);
     assert.deepEqual(initial.overrides, {});
+    assert.equal(config.settings.agent.greet_on_join, true);
 
     config.setOverride("ai.model", "gpt-5.6-sol");
     config.setOverride("tts.qwen.voice", "arthas");
@@ -540,11 +542,12 @@ test("history survives restart and supports filtered fuzzy recall", async () => 
       },
       new Date(2026, 7, 25, 10, 0, 6),
     );
+    store.appendVoiceMemberJoined("Игорь", "3", "master", new Date(2026, 7, 25, 10, 0, 7));
 
     const reloaded = new HistoryStore(path);
-    assert.equal(reloaded.entries.length, 4);
-    assert.equal(readFileSync(path, "utf8").trim().split("\n").length, 4);
-    assert.equal(reloaded.entries.at(-1)?.kind, "auto_participation");
+    assert.equal(reloaded.entries.length, 5);
+    assert.equal(readFileSync(path, "utf8").trim().split("\n").length, 5);
+    assert.equal(reloaded.entries.at(-1)?.kind, "voice_member_joined");
     assert.equal(
       searchHistory(reloaded.entries, { limit: 20 }).some((result) => result.entry.kind === "auto_participation"),
       false,
@@ -566,6 +569,13 @@ test("history survives restart and supports filtered fuzzy recall", async () => 
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("voice join detection ignores mute changes and recognizes channel entry", () => {
+  assert.equal(enteredVoiceChannel(null, "master", "master"), true);
+  assert.equal(enteredVoiceChannel("other", "master", "master"), true);
+  assert.equal(enteredVoiceChannel("master", "master", "master"), false);
+  assert.equal(enteredVoiceChannel("master", null, "master"), false);
 });
 
 test("sleep memories require exact user-authored evidence", () => {

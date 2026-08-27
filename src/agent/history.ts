@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 import { errorMessage, formatMessageTime, isRecord, log } from "../common.js";
 import { type AutoParticipationDecisionRecord, isAutoParticipationDecisionRecord } from "./auto-participation.js";
 
-export type HistoryKind = "transcript" | "assistant" | "tool" | "auto_participation";
+export type HistoryKind = "transcript" | "assistant" | "tool" | "auto_participation" | "voice_member_joined";
 
 interface HistoryEntryBase {
   timestamp: string;
@@ -26,6 +26,12 @@ export interface AssistantHistoryEntry extends MessageHistoryEntryBase {
   kind: "assistant";
 }
 
+export interface VoiceMemberJoinedHistoryEntry extends MessageHistoryEntryBase {
+  kind: "voice_member_joined";
+  speaker_id: string;
+  channel: string;
+}
+
 export interface ToolHistoryEntry extends HistoryEntryBase {
   kind: "tool";
   tool: string;
@@ -39,6 +45,7 @@ export interface AutoParticipationHistoryEntry extends HistoryEntryBase, AutoPar
 export type HistoryEntry =
   | TranscriptHistoryEntry
   | AssistantHistoryEntry
+  | VoiceMemberJoinedHistoryEntry
   | ToolHistoryEntry
   | AutoParticipationHistoryEntry;
 
@@ -70,11 +77,20 @@ function isHistoryEntry(value: unknown): value is HistoryEntry {
     (value["kind"] !== "transcript" &&
       value["kind"] !== "assistant" &&
       value["kind"] !== "tool" &&
-      value["kind"] !== "auto_participation")
+      value["kind"] !== "auto_participation" &&
+      value["kind"] !== "voice_member_joined")
   )
     return false;
   if (value["kind"] === "auto_participation") return isAutoParticipationDecisionRecord(value);
   if (value["kind"] === "tool") return typeof value["tool"] === "string";
+  if (value["kind"] === "voice_member_joined") {
+    return (
+      typeof value["speaker_id"] === "string" &&
+      typeof value["speaker"] === "string" &&
+      typeof value["text"] === "string" &&
+      typeof value["channel"] === "string"
+    );
+  }
   return (
     (value["speaker_id"] === undefined || typeof value["speaker_id"] === "string") &&
     typeof value["speaker"] === "string" &&
@@ -255,6 +271,19 @@ export class HistoryStore {
       time: formatMessageTime(at),
       kind: "auto_participation",
       ...decision,
+    });
+  }
+
+  appendVoiceMemberJoined(speaker: string, speakerId: string, channel: string, at = new Date()): void {
+    this.append({
+      timestamp: at.toISOString(),
+      date: formatMessageDate(at),
+      time: formatMessageTime(at),
+      kind: "voice_member_joined",
+      speaker,
+      speaker_id: speakerId,
+      channel,
+      text: `вошёл в голосовой канал ${channel}`,
     });
   }
 

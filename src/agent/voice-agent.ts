@@ -13,6 +13,8 @@ import type { HistoryEntry, HistoryStore } from "./history.js";
 import type { AgentRuntime } from "./runtime.js";
 import { hasStopCommand, hasWakeWord } from "./transcript.js";
 
+const GREETING_COOLDOWN_MS = 30 * 60 * 1_000;
+
 export class VoiceAgent {
   private readonly responding = new Set<string>();
   private readonly proactive = new Set<string>();
@@ -22,6 +24,7 @@ export class VoiceAgent {
   private readonly autoParticipationTimers = new Map<string, NodeJS.Timeout>();
   private readonly lastAutoParticipationCheckAt = new Map<string, number>();
   private readonly lastAutoParticipationResponseAt = new Map<string, number>();
+  private readonly lastGreetingAt = new Map<string, number>();
 
   constructor(
     private readonly runtime: AgentRuntime,
@@ -34,6 +37,7 @@ export class VoiceAgent {
     private readonly isVoiceQuiet: (guildId: string) => boolean,
   ) {
     log("info", "auto participation configured", { mode: config.settings.agent.auto_participation.mode });
+    log("info", "voice greetings configured", { enabled: config.settings.agent.greet_on_join });
   }
 
   onTranscript(transcript: Transcript): void {
@@ -104,6 +108,41 @@ export class VoiceAgent {
     this.history.appendMessage("assistant", "Олег", answer);
     await this.speak(guildId, this.tts.synthesize(answer));
     log("info", "scheduled task completed", { answer });
+  }
+
+  onVoiceMemberJoined(guildId: string, userId: string, user: string, channel: string): void {
+    this.history.appendVoiceMemberJoined(user, userId, channel);
+    this.conversationVersions.set(guildId, (this.conversationVersions.get(guildId) ?? 0) + 1);
+    this.cancelAutoParticipationTimer(guildId);
+    log("info", "voice member joined", { guild_id: guildId, user, user_id: userId, channel });
+
+    const now = Date.now();
+    if (
+      !this.config.settings.agent.greet_on_join ||
+      this.responding.has(guildId) ||
+      now - (this.lastGreetingAt.get(userId) ?? 0) < GREETING_COOLDOWN_MS
+    ) {
+      return;
+    }
+    this.lastGreetingAt.set(userId, now);
+    const generation = (this.generations.get(guildId) ?? 0) + 1;
+    this.generations.set(guildId, generation);
+    this.responding.add(guildId);
+    this.proactive.add(guildId);
+    const context = this.contextFor(this.history.entries);
+    void this.respond(
+      guildId,
+      context,
+      generation,
+      `Коротко и естественно поприветствовать вошедшего участника ${user}. Не упоминать userId, профиль, сохранённые сведения или сам механизм события.`,
+    )
+      .catch((error: unknown) => log("error", "voice greeting failed", { user, error: errorMessage(error) }))
+      .finally(() => {
+        if (this.generations.get(guildId) === generation) {
+          this.responding.delete(guildId);
+          this.proactive.delete(guildId);
+        }
+      });
   }
 
   clear(guildId: string): void {

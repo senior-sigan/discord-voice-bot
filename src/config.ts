@@ -60,6 +60,7 @@ const settingsSchema = z.strictObject({
     filler_dir: nonBlankString,
     wake_cooldown_ms: nonNegativeInteger,
     context_chars: positiveInteger.min(1_000),
+    greet_on_join: z.boolean().default(true),
     auto_participation: z.strictObject({
       mode: autoParticipationModeSchema,
       silence_ms: nonNegativeInteger,
@@ -128,6 +129,7 @@ const INITIAL_DEFAULTS: RuntimeSettings = {
     filler_dir: "assets/fillers",
     wake_cooldown_ms: 5_000,
     context_chars: 12_000,
+    greet_on_join: true,
     auto_participation: {
       mode: "off",
       silence_ms: 4_000,
@@ -176,6 +178,7 @@ export class AppConfig {
       model: this.effectiveSettings.ai.model,
       tts_voice: this.effectiveSettings.tts.qwen.voice,
       auto_participation: this.effectiveSettings.agent.auto_participation.mode,
+      greet_on_join: this.effectiveSettings.agent.greet_on_join,
     });
   }
 
