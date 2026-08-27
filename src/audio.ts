@@ -9,10 +9,12 @@ export function stereoPcmToMono(pcm: Buffer): Float32Array {
 
 export function floatMonoToStereoPcm(samples: Float32Array): Buffer {
   const pcm = Buffer.allocUnsafe(samples.length * 4);
-  for (let input = 0, output = 0; input < samples.length; input++, output += 4) {
-    const sample = Math.round(Math.max(-1, Math.min(1, samples[input]!)) * 32_767);
+  let output = 0;
+  for (const value of samples) {
+    const sample = Math.round(Math.max(-1, Math.min(1, value)) * 32_767);
     pcm.writeInt16LE(sample, output);
     pcm.writeInt16LE(sample, output + 2);
+    output += 4;
   }
   return pcm;
 }

@@ -15,19 +15,22 @@ export interface AiRuntime {
 }
 
 export async function createAiRuntime(config: AppConfig, interactive: boolean): Promise<AiRuntime> {
-  const prompt = interactive ? new ConsolePrompter() : undefined;
+  if (!interactive) {
+    const provider = normalizeProvider(config.aiProvider);
+    return provider === "openai-codex" ? setupOpenAiCodex(config) : setupOpenAiCompatible(config);
+  }
+
+  const prompt = new ConsolePrompter();
   try {
-    const provider = interactive
-      ? await prompt!.choose<AiProviderId>("Провайдер модели", [
-          { id: "openai-codex", label: "OpenAI Codex — подписка ChatGPT Plus/Pro" },
-          { id: "openai-compatible", label: "OpenAI-compatible — LM Studio, llama.cpp, vLLM" },
-        ])
-      : normalizeProvider(config.aiProvider);
+    const provider = await prompt.choose<AiProviderId>("Провайдер модели", [
+      { id: "openai-codex", label: "OpenAI Codex — подписка ChatGPT Plus/Pro" },
+      { id: "openai-compatible", label: "OpenAI-compatible — LM Studio, llama.cpp, vLLM" },
+    ]);
     return await (provider === "openai-codex"
       ? setupOpenAiCodex(config, prompt)
       : setupOpenAiCompatible(config, prompt));
   } finally {
-    prompt?.close();
+    prompt.close();
   }
 }
 
@@ -119,7 +122,9 @@ async function chooseModel(
       "Модель",
       available.map((model) => ({ id: model.id, label: `${model.name} (${model.id})` })),
     );
-    return models.getModel(provider, id)!;
+    const selected = models.getModel(provider, id);
+    if (!selected) throw new Error(`Selected AI model '${id}' not found for ${provider}`);
+    return selected;
   }
   const model = configured ? models.getModel(provider, configured) : available[0];
   if (!model) {

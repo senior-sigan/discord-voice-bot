@@ -16,7 +16,7 @@ export class VoiceAgent {
     private readonly runtime: AgentRuntime,
     private readonly history: HistoryStore,
     private readonly tts: Tts,
-    private readonly fillers: GeneratedAudio[],
+    private readonly fillers: readonly [GeneratedAudio, ...GeneratedAudio[]],
     private readonly speak: (guildId: string, audio: VoiceAudio) => Promise<void>,
     private readonly stopSpeaking: (guildId: string) => void,
   ) {}
@@ -48,7 +48,7 @@ export class VoiceAgent {
     this.generations.set(transcript.guildId, generation);
     this.responding.add(transcript.guildId);
     this.lastWakeAt.set(transcript.guildId, now);
-    const filler = this.fillers[Math.floor(Math.random() * this.fillers.length)]!;
+    const filler = this.fillers.at(Math.floor(Math.random() * this.fillers.length)) ?? this.fillers[0];
     void this.speak(transcript.guildId, filler).catch((error: unknown) => {
       log("error", "filler playback failed", { error: errorMessage(error) });
     });
@@ -82,8 +82,7 @@ export class VoiceAgent {
     const limit = Math.max(1_000, Number(process.env["LLM_CONTEXT_CHARS"] ?? 12_000) || 12_000);
     const lines: string[] = [];
     let length = 0;
-    for (let index = history.length - 1; index >= 0; index--) {
-      const entry = history[index]!;
+    for (const entry of history.toReversed()) {
       const line =
         entry.kind === "tool"
           ? `[${entry.time}] Олег вызвал ${entry.tool} с аргументами ${JSON.stringify(entry.arguments ?? {})}`

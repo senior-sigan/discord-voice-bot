@@ -19,9 +19,6 @@
       "preset": "recommended",
       "complexity": {
         "useLiteralKeys": "off"
-      },
-      "style": {
-        "noNonNullAssertion": "off"
       }
     }
   },

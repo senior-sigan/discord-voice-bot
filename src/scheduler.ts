@@ -6,14 +6,11 @@ import { Cron } from "croner";
 
 import { errorMessage, isRecord, log } from "./common.js";
 
-export type ScheduledTask = {
+type ScheduledTaskBase = {
   id: string;
   created_at: string;
   instruction: string;
-  kind: "once" | "cron";
   timezone: string;
-  run_at?: string;
-  cron?: string;
   status: "scheduled" | "running" | "completed" | "failed";
   runs: number;
   next_run_at?: string;
@@ -21,6 +18,9 @@ export type ScheduledTask = {
   completed_at?: string;
   last_error?: string;
 };
+
+export type ScheduledTask = ScheduledTaskBase &
+  ({ kind: "once"; run_at: string; cron?: never } | { kind: "cron"; cron: string; run_at?: never });
 
 export type CreateTaskInput = {
   instruction: string;
@@ -81,31 +81,32 @@ export class TaskScheduler {
     const cron = input.cron?.trim();
     if (instruction.length < 3 || instruction.length > 2_000) throw new Error("Invalid task instruction");
     validateTimezone(timezone);
-    if (Boolean(runAt) === Boolean(cron)) throw new Error("Provide exactly one of run_at or cron");
+    if ((!runAt && !cron) || (runAt && cron)) throw new Error("Provide exactly one of run_at or cron");
 
-    let next: Date;
-    if (runAt) {
-      next = new Date(runAt);
-      if (Number.isNaN(next.getTime())) throw new Error("run_at must be an ISO 8601 datetime");
-      if (next.getTime() < Date.now() - 5_000) throw new Error("run_at is in the past");
-    } else {
-      const probe = new Cron(cron!, { timezone, mode: "5-part", paused: true });
-      next = probe.nextRun()!;
-      probe.stop();
-      if (!next) throw new Error("Cron expression has no future runs");
-    }
-
-    const task: ScheduledTask = {
+    const common = {
       id: randomUUID(),
       created_at: new Date().toISOString(),
       instruction,
-      kind: runAt ? "once" : "cron",
       timezone,
-      ...(runAt ? { run_at: next.toISOString() } : { cron: cron! }),
-      status: "scheduled",
+      status: "scheduled" as const,
       runs: 0,
-      next_run_at: next.toISOString(),
     };
+    let task: ScheduledTask;
+    if (runAt) {
+      const next = new Date(runAt);
+      if (Number.isNaN(next.getTime())) throw new Error("run_at must be an ISO 8601 datetime");
+      if (next.getTime() < Date.now() - 5_000) throw new Error("run_at is in the past");
+      task = { ...common, kind: "once", run_at: next.toISOString(), next_run_at: next.toISOString() };
+    } else if (cron) {
+      const probe = new Cron(cron, { timezone, mode: "5-part", paused: true });
+      const next = probe.nextRun();
+      probe.stop();
+      if (!next) throw new Error("Cron expression has no future runs");
+      task = { ...common, kind: "cron", cron, next_run_at: next.toISOString() };
+    } else {
+      throw new Error("Provide exactly one of run_at or cron");
+    }
+
     this.tasks.push(task);
     this.save();
     if (this.started) this.schedule(task);
@@ -123,7 +124,9 @@ export class TaskScheduler {
     if (index < 0) return undefined;
     this.jobs.get(id)?.stop();
     this.jobs.delete(id);
-    const [deleted] = this.tasks.splice(index, 1);
+    const deleted = this.tasks[index];
+    if (!deleted) return undefined;
+    this.tasks.splice(index, 1);
     this.save();
     return deleted;
   }
@@ -132,7 +135,7 @@ export class TaskScheduler {
     if (!this.started || task.status !== "scheduled") return;
     this.jobs.get(task.id)?.stop();
     const pattern =
-      task.kind === "cron" ? task.cron! : new Date(Math.max(Date.now() + 50, new Date(task.run_at!).getTime()));
+      task.kind === "cron" ? task.cron : new Date(Math.max(Date.now() + 50, new Date(task.run_at).getTime()));
     const job = new Cron(
       pattern,
       {

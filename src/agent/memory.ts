@@ -86,7 +86,8 @@ export class MemoryStore {
 
   rememberReflection(input: ReflectionMemoryInput): MemoryEntry {
     const fact = input.fact.trim();
-    if (!fact || !input.subjects.length || !input.evidence.length || ![3, 4, 5].includes(input.importance)) {
+    const primary = input.evidence[0];
+    if (!fact || !input.subjects.length || !primary || ![3, 4, 5].includes(input.importance)) {
       throw new Error("invalid reflection memory");
     }
     const subjects = [...input.subjects].sort((left, right) => left.id.localeCompare(right.id));
@@ -104,7 +105,6 @@ export class MemoryStore {
     );
     if (existing) return existing;
     const now = new Date();
-    const primary = input.evidence[0]!;
     const entry: MemoryEntry = {
       id: randomUUID(),
       timestamp: now.toISOString(),

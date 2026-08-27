@@ -422,13 +422,15 @@ export function validateProfileProposal(
           throw new Error("requires evidence from two different messages");
         }
         if (sections[section].some((claim) => normalized(claim.summary) === normalized(proposal.summary))) continue;
+        const lastSeenAt = evidence
+          .map((reference) => reference.source_timestamp)
+          .sort()
+          .at(-1);
+        if (!lastSeenAt) throw new Error("missing evidence");
         sections[section].push({
           summary: proposal.summary.trim(),
           status: proposal.status,
-          last_seen_at: evidence
-            .map((reference) => reference.source_timestamp)
-            .sort()
-            .at(-1)!,
+          last_seen_at: lastSeenAt,
           evidence,
         });
       } catch (error) {
@@ -438,13 +440,16 @@ export function validateProfileProposal(
   }
 
   const timestamps = entries.map((entry) => entry.timestamp).sort();
+  const sourceFrom = timestamps.at(0);
+  const sourceTo = timestamps.at(-1);
+  if (!sourceFrom || !sourceTo) throw new Error(`No transcript timestamps for profile ${userId}`);
   return {
     profile: {
       user_id: userId,
       name,
       updated_at: now.toISOString(),
-      source_from: timestamps[0]!,
-      source_to: timestamps.at(-1)!,
+      source_from: sourceFrom,
+      source_to: sourceTo,
       sections,
     },
     rejected,
@@ -562,7 +567,11 @@ ${chunk.map(transcriptLine).join("\n")}`,
     rejected.push(...validated.rejected.map((reason) => `chunk ${index + 1} ${reason}`));
   }
 
-  if (candidates.length === 1) return { profile: candidates[0]!, rejected };
+  if (candidates.length === 1) {
+    const profile = candidates[0];
+    if (!profile) throw new Error(`No profile candidate for ${name}`);
+    return { profile, rejected };
+  }
 
   console.log(`[profile ${name}] consolidating ${candidates.length} candidates`);
   const payload = await proposeProfile(

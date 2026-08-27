@@ -88,21 +88,23 @@ function normalizedWords(value: string): string[] {
 
 function wordSimilarity(left: string, right: string): number {
   if (left === right) return 1;
-  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  const previous = new Uint32Array(right.length + 1);
+  for (let index = 0; index < previous.length; index++) previous[index] = index;
+  let distance = right.length;
   for (let row = 1; row <= left.length; row++) {
-    let diagonal = previous[0]!;
+    let diagonal = row - 1;
+    let leftDistance = row;
     previous[0] = row;
-    for (let column = 1; column <= right.length; column++) {
-      const above = previous[column]!;
-      previous[column] = Math.min(
-        above + 1,
-        previous[column - 1]! + 1,
-        diagonal + (left[row - 1] === right[column - 1] ? 0 : 1),
-      );
+    distance = row;
+    for (const [column, above] of previous.entries()) {
+      if (column === 0) continue;
+      distance = Math.min(above + 1, leftDistance + 1, diagonal + (left[row - 1] === right[column - 1] ? 0 : 1));
+      previous[column] = distance;
+      leftDistance = distance;
       diagonal = above;
     }
   }
-  return 1 - previous[right.length]! / Math.max(left.length, right.length);
+  return 1 - distance / Math.max(left.length, right.length);
 }
 
 function historyText(entry: HistoryEntry): string {

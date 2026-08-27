@@ -13,7 +13,7 @@ import {
   validateToolCall,
 } from "@earendil-works/pi-ai";
 
-import { HistoryStore, searchHistory } from "./agent/history.js";
+import { type HistoryEntry, HistoryStore, searchHistory } from "./agent/history.js";
 import { MemoryStore } from "./agent/memory.js";
 import { ProfileStore } from "./agent/profiles.js";
 import { AgentRuntime } from "./agent/runtime.js";
@@ -114,8 +114,8 @@ test("stereo PCM is mixed to mono without changing duration", () => {
 
   const mono = stereoPcmToMono(pcm);
   assert.equal(mono.length, 2);
-  assert.ok(Math.abs(mono[0]!) < 0.0001);
-  assert.equal(mono[1]!, 0.5);
+  assert.ok(Math.abs(mono.at(0) ?? Number.POSITIVE_INFINITY) < 0.0001);
+  assert.equal(mono.at(1), 0.5);
 });
 
 test("VAD gates audio and resets between chunks", () => {
@@ -180,13 +180,12 @@ test("data path uses the configured data directory", () => {
 test("scheduled tasks persist after execution and recurring tasks can be deleted", async () => {
   const directory = mkdtempSync(join(tmpdir(), "voice-agent-tasks-"));
   const path = join(directory, "tasks.json");
-  let scheduler: TaskScheduler | undefined;
+  let taskRan = (): void => undefined;
+  const ran = new Promise<void>((resolve) => {
+    taskRan = resolve;
+  });
+  const scheduler = new TaskScheduler(path, async () => taskRan());
   try {
-    let taskRan!: () => void;
-    const ran = new Promise<void>((resolve) => {
-      taskRan = resolve;
-    });
-    scheduler = new TaskScheduler(path, async () => taskRan());
     scheduler.start();
     const once = scheduler.create({
       instruction: "Напомни проверить тест",
@@ -226,7 +225,7 @@ test("scheduled tasks persist after execution and recurring tasks can be deleted
     assert.equal(reloaded.delete(recurring.id)?.kind, "cron");
     assert.equal((JSON.parse(readFileSync(path, "utf8")) as unknown[]).length, 1);
   } finally {
-    scheduler?.stop();
+    scheduler.stop();
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -466,7 +465,7 @@ test("sleep memories require exact user-authored evidence", () => {
       speaker_id: "2",
       text: "Давайте выберем билеты в субботу",
     },
-  ];
+  ] satisfies [HistoryEntry, HistoryEntry];
   const result = validateProposals(
     {
       memories: [
@@ -475,21 +474,21 @@ test("sleep memories require exact user-authored evidence", () => {
           summary: "Илья планирует в сентябре поехать на Байкал.",
           subject_ids: ["1"],
           importance: 5,
-          evidence: [{ source_timestamp: sources[0]!.timestamp, quote: "в сентябре поехать на Байкал" }],
+          evidence: [{ source_timestamp: sources[0].timestamp, quote: "в сентябре поехать на Байкал" }],
         },
         {
           kind: "person",
           summary: "Илья собирается выбирать билеты в субботу.",
           subject_ids: ["1"],
           importance: 4,
-          evidence: [{ source_timestamp: sources[1]!.timestamp, quote: "выберем билеты в субботу" }],
+          evidence: [{ source_timestamp: sources[1].timestamp, quote: "выберем билеты в субботу" }],
         },
         {
           kind: "story",
           summary: "Участники договорились вернуться к билетам в субботу.",
           subject_ids: ["1", "2"],
           importance: 4,
-          evidence: [{ source_timestamp: sources[1]!.timestamp, quote: "выберем билеты в субботу" }],
+          evidence: [{ source_timestamp: sources[1].timestamp, quote: "выберем билеты в субботу" }],
         },
         {
           kind: "activity",
@@ -497,11 +496,11 @@ test("sleep memories require exact user-authored evidence", () => {
           summary: "Илья и Саша обсуждали поездку и выбор билетов.",
           subject_ids: ["1", "2"],
           importance: 3,
-          started_at: sources[0]!.timestamp,
-          ended_at: sources[1]!.timestamp,
+          started_at: sources[0].timestamp,
+          ended_at: sources[1].timestamp,
           evidence: [
-            { source_timestamp: sources[0]!.timestamp, quote: "поехать на Байкал" },
-            { source_timestamp: sources[1]!.timestamp, quote: "выберем билеты" },
+            { source_timestamp: sources[0].timestamp, quote: "поехать на Байкал" },
+            { source_timestamp: sources[1].timestamp, quote: "выберем билеты" },
           ],
         },
       ],
@@ -549,7 +548,7 @@ test("person profiles are structured, updated in place and hide raw evidence fro
       speaker_id: "1",
       text: "Сейчас работаю над голосовым агентом для Discord",
     },
-  ];
+  ] satisfies [HistoryEntry, HistoryEntry, HistoryEntry];
   try {
     const result = validateProfileProposal(
       {
@@ -559,8 +558,8 @@ test("person profiles are structured, updated in place and hide raw evidence fro
               summary: "Регулярно играет в Deadlock с друзьями.",
               status: "recurring",
               evidence: [
-                { source_timestamp: sources[0]!.timestamp, quote: "снова играл в Deadlock" },
-                { source_timestamp: sources[1]!.timestamp, quote: "опять запустил Deadlock" },
+                { source_timestamp: sources[0].timestamp, quote: "снова играл в Deadlock" },
+                { source_timestamp: sources[1].timestamp, quote: "опять запустил Deadlock" },
               ],
             },
           ],
@@ -568,7 +567,7 @@ test("person profiles are structured, updated in place and hide raw evidence fro
             {
               summary: "Работает над голосовым Discord-агентом.",
               status: "current",
-              evidence: [{ source_timestamp: sources[2]!.timestamp, quote: "голосовым агентом для Discord" }],
+              evidence: [{ source_timestamp: sources[2].timestamp, quote: "голосовым агентом для Discord" }],
             },
           ],
           life_stories: [],
@@ -578,7 +577,7 @@ test("person profiles are structured, updated in place and hide raw evidence fro
             {
               summary: "Интересуется научной фантастикой.",
               status: "uncertain",
-              evidence: [{ source_timestamp: sources[0]!.timestamp, quote: "играл в Deadlock" }],
+              evidence: [{ source_timestamp: sources[0].timestamp, quote: "играл в Deadlock" }],
             },
           ],
           plans: [],
@@ -636,19 +635,18 @@ test("reflected memory persists metadata and deduplicates exact facts", () => {
   try {
     const path = join(directory, "memory.jsonl");
     const store = new MemoryStore(path);
+    const evidence = {
+      source_timestamp: "2026-08-26T10:00:00.000Z",
+      speaker_id: "1",
+      speaker: "Илья",
+      quote: "Я решил в сентябре поехать на Байкал",
+    };
     const input = {
       kind: "person" as const,
       fact: "Илья планирует в сентябре поехать на Байкал.",
       subjects: [{ id: "1", name: "Илья" }],
       importance: 5,
-      evidence: [
-        {
-          source_timestamp: "2026-08-26T10:00:00.000Z",
-          speaker_id: "1",
-          speaker: "Илья",
-          quote: "Я решил в сентябре поехать на Байкал",
-        },
-      ],
+      evidence: [evidence],
       day: "2026-08-26",
     };
     store.rememberReflection(input);
@@ -656,7 +654,7 @@ test("reflected memory persists metadata and deduplicates exact facts", () => {
     store.rememberReflection({
       ...input,
       subjects: [{ id: "2", name: "Саша" }],
-      evidence: [{ ...input.evidence[0]!, speaker_id: "2", speaker: "Саша" }],
+      evidence: [{ ...evidence, speaker_id: "2", speaker: "Саша" }],
     });
     store.rememberReflection({
       ...input,
@@ -664,8 +662,8 @@ test("reflected memory persists metadata and deduplicates exact facts", () => {
       title: "Планировали поездку",
       fact: "Обсуждали поездку на Байкал.",
       importance: 3,
-      started_at: input.evidence[0]!.source_timestamp,
-      ended_at: input.evidence[0]!.source_timestamp,
+      started_at: evidence.source_timestamp,
+      ended_at: evidence.source_timestamp,
     });
 
     const reloaded = new MemoryStore(path);
@@ -674,7 +672,7 @@ test("reflected memory persists metadata and deduplicates exact facts", () => {
     assert.deepEqual(reloaded.entries[0]?.subject_ids, ["1"]);
     assert.equal(reloaded.entries[0]?.origin, "sleep");
     assert.equal(reloaded.entries[2]?.title, "Планировали поездку");
-    assert.equal(reloaded.entries[2]?.started_at, input.evidence[0]!.source_timestamp);
+    assert.equal(reloaded.entries[2]?.started_at, evidence.source_timestamp);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

@@ -17,12 +17,13 @@ export async function createTts(modelDir: string): Promise<Tts> {
   throw new Error(`Unsupported TTS_BACKEND: ${backend}`);
 }
 
-export function loadFillers(directory: string): GeneratedAudio[] {
+export function loadFillers(directory: string): [GeneratedAudio, ...GeneratedAudio[]] {
   const files = readdirSync(directory)
     .filter((file) => file.endsWith(".wav"))
     .sort();
-  if (!files.length) throw new Error(`No WAV fillers found in ${directory}`);
-  const fillers = files.map((file) => sherpa.readWave(`${directory}/${file}`));
+  const [first, ...rest] = files.map((file) => sherpa.readWave(`${directory}/${file}`));
+  if (!first) throw new Error(`No WAV fillers found in ${directory}`);
+  const fillers: [GeneratedAudio, ...GeneratedAudio[]] = [first, ...rest];
   log("info", "fillers loaded", { count: fillers.length });
   return fillers;
 }

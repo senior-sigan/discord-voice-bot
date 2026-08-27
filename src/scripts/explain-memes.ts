@@ -247,7 +247,8 @@ function completedPrefix(input: Array<{ raw: string; record: MemeRecord }>): num
   for (const [index, line] of lines.entries()) {
     const output = parseRecord(line, `${OUTPUT_FILE}:${index + 1}`);
     parseExplanation(output);
-    if (output.attachment_id !== input[index]!.record.attachment_id) {
+    const source = input[index];
+    if (!source || output.attachment_id !== source.record.attachment_id) {
       throw new Error(`${OUTPUT_FILE}:${index + 1} does not match ${INPUT_FILE}`);
     }
   }
@@ -264,8 +265,8 @@ async function main(): Promise<void> {
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("optional limit must be a positive integer");
   const end = Math.min(input.length, completed + limit);
 
-  for (let index = completed; index < end; index++) {
-    const item = input[index]!;
+  for (const [offset, item] of input.slice(completed, end).entries()) {
+    const index = completed + offset;
     console.log(`[${index + 1}/${input.length}]`);
     console.log(item.raw);
     const explanation = await explain(item.record);
