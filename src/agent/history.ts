@@ -11,6 +11,7 @@ export interface HistoryEntry {
   time: string;
   kind: HistoryKind;
   speaker?: string;
+  speaker_id?: string;
   text?: string;
   tool?: string;
   arguments?: unknown;
@@ -40,9 +41,12 @@ function isHistoryEntry(value: unknown): value is HistoryEntry {
     (value["kind"] !== "transcript" && value["kind"] !== "assistant" && value["kind"] !== "tool")
   )
     return false;
-  return value["kind"] === "tool"
-    ? typeof value["tool"] === "string"
-    : typeof value["speaker"] === "string" && typeof value["text"] === "string";
+  return (
+    (value["speaker_id"] === undefined || typeof value["speaker_id"] === "string") &&
+    (value["kind"] === "tool"
+      ? typeof value["tool"] === "string"
+      : typeof value["speaker"] === "string" && typeof value["text"] === "string")
+  );
 }
 
 function normalizedWords(value: string): string[] {
@@ -179,13 +183,20 @@ export class HistoryStore {
     log("info", "history loaded", { file: path, entries: this.entries.length });
   }
 
-  appendMessage(kind: "transcript" | "assistant", speaker: string, text: string, at = new Date()): void {
+  appendMessage(
+    kind: "transcript" | "assistant",
+    speaker: string,
+    text: string,
+    at = new Date(),
+    speakerId?: string,
+  ): void {
     this.append({
       timestamp: at.toISOString(),
       date: formatMessageDate(at),
       time: formatMessageTime(at),
       kind,
       speaker,
+      ...(speakerId ? { speaker_id: speakerId } : {}),
       text,
     });
   }

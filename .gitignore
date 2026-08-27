@@ -4,6 +4,8 @@ dist/
 recordings/
 history.jsonl
 memory.jsonl
+memory.jsonl.sleep-state.json
+profiles.json
 auth.json
 memes/
 references/

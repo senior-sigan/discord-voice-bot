@@ -15,6 +15,7 @@ export interface AppConfig {
   aiMaxTokens: number;
   historyFile: string;
   memoryFile: string;
+  profilesFile: string;
 }
 
 export function loadConfig(): AppConfig {
@@ -46,5 +47,6 @@ export function loadConfig(): AppConfig {
     aiMaxTokens: Math.max(64, Number(process.env["AI_MAX_TOKENS"] ?? process.env["LLM_MAX_TOKENS"] ?? 1_024) || 1_024),
     historyFile: process.env["HISTORY_FILE"] ?? "history.jsonl",
     memoryFile: process.env["MEMORY_FILE"] ?? "memory.jsonl",
+    profilesFile: process.env["PROFILES_FILE"] ?? "profiles.json",
   };
 }

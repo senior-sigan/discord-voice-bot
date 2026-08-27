@@ -1,5 +1,6 @@
 export interface Transcript {
   guildId: string;
+  userId: string;
   user: string;
   timestamp: string;
   text: string;

@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 
 import { HistoryStore } from "./agent/history.js";
 import { MemoryStore } from "./agent/memory.js";
+import { ProfileStore } from "./agent/profiles.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { SkillStore } from "./agent/skills.js";
 import { VoiceAgent } from "./agent/voice-agent.js";
@@ -17,6 +18,7 @@ async function run(): Promise<void> {
   const config = loadConfig();
   const history = new HistoryStore(config.historyFile);
   const memory = new MemoryStore(config.memoryFile);
+  const profiles = new ProfileStore(config.profilesFile);
   const skills = new SkillStore();
   await skills.load();
   const ai = await createAiRuntime(config, process.argv.includes("--select-model"));
@@ -26,7 +28,7 @@ async function run(): Promise<void> {
   const agentRuntime = new AgentRuntime(
     ai.models,
     ai.model,
-    createTools(history, memory, skills, discord),
+    createTools(history, memory, profiles, skills, discord),
     history,
     skills,
   );

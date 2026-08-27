@@ -97,7 +97,7 @@ export class DiscordVoiceSession {
       }
       this.transcriber.enqueue(
         samples,
-        { guildId: this.guild.id, user, timestamp: new Date().toISOString() },
+        { guildId: this.guild.id, userId, user, timestamp: new Date().toISOString() },
         this.onTranscript,
       );
     };

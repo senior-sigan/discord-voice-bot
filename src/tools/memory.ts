@@ -97,6 +97,6 @@ function memoryProjection(entry: MemoryEntry): HistoryEntry {
     time: entry.time,
     kind: "transcript",
     speaker: entry.speaker,
-    text: `${entry.fact} ${entry.evidence}`,
+    text: `${entry.title ?? ""} ${entry.fact} ${entry.evidence}`,
   };
 }

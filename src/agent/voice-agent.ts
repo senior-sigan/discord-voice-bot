@@ -22,7 +22,13 @@ export class VoiceAgent {
   ) {}
 
   onTranscript(transcript: Transcript): void {
-    this.history.appendMessage("transcript", transcript.user, transcript.text, new Date(transcript.timestamp));
+    this.history.appendMessage(
+      "transcript",
+      transcript.user,
+      transcript.text,
+      new Date(transcript.timestamp),
+      transcript.userId,
+    );
     if (hasStopCommand(transcript.text)) {
       this.generations.set(transcript.guildId, (this.generations.get(transcript.guildId) ?? 0) + 1);
       this.responding.delete(transcript.guildId);

@@ -15,6 +15,7 @@ import {
 
 import { HistoryStore, searchHistory } from "./agent/history.js";
 import { MemoryStore } from "./agent/memory.js";
+import { ProfileStore } from "./agent/profiles.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { SkillStore } from "./agent/skills.js";
 import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/transcript.js";
@@ -22,11 +23,20 @@ import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio
 import { formatMessageTime } from "./common.js";
 import { isRetryableLlmError, parseExplanation, resizeImageForLlm } from "./scripts/explain-memes.js";
 import { imageFileName, isImageAttachment } from "./scripts/export-memes.js";
+import {
+  chunkTranscripts,
+  hourlyChunks,
+  requestedDays,
+  structuredMemoryPayload,
+  validateProfileProposal,
+  validateProposals,
+} from "./scripts/sleep.js";
 import { containsSpeech } from "./stt/vad.js";
 import { currentDateTimeTool } from "./tools/datetime.js";
 import { createDiscordTools, safeImagePath } from "./tools/discord.js";
 import { createMemeSearchTool } from "./tools/memes.js";
 import { createRememberTool, createSearchMemoryTool } from "./tools/memory.js";
+import { createGetProfileTool } from "./tools/profiles.js";
 import { createRecallHistoryTool } from "./tools/recall.js";
 import { createSkillTools } from "./tools/skills.js";
 import { isSafePublicUrl } from "./tools/web.js";
@@ -361,6 +371,240 @@ test("history survives restart and supports filtered fuzzy recall", async () => 
         recalled.details.count === 1,
       true,
     );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("sleep memories require exact user-authored evidence", () => {
+  const sources = [
+    {
+      timestamp: "2026-08-26T10:00:00.000Z",
+      date: "2026-08-26",
+      time: "16:00:00",
+      kind: "transcript" as const,
+      speaker: "Илья",
+      speaker_id: "1",
+      text: "Я решил в сентябре поехать на Байкал",
+    },
+    {
+      timestamp: "2026-08-26T10:01:00.000Z",
+      date: "2026-08-26",
+      time: "17:01:00",
+      kind: "transcript" as const,
+      speaker: "Саша",
+      speaker_id: "2",
+      text: "Давайте выберем билеты в субботу",
+    },
+  ];
+  const result = validateProposals(
+    {
+      memories: [
+        {
+          kind: "person",
+          summary: "Илья планирует в сентябре поехать на Байкал.",
+          subject_ids: ["1"],
+          importance: 5,
+          evidence: [{ source_timestamp: sources[0]!.timestamp, quote: "в сентябре поехать на Байкал" }],
+        },
+        {
+          kind: "person",
+          summary: "Илья собирается выбирать билеты в субботу.",
+          subject_ids: ["1"],
+          importance: 4,
+          evidence: [{ source_timestamp: sources[1]!.timestamp, quote: "выберем билеты в субботу" }],
+        },
+        {
+          kind: "story",
+          summary: "Участники договорились вернуться к билетам в субботу.",
+          subject_ids: ["1", "2"],
+          importance: 4,
+          evidence: [{ source_timestamp: sources[1]!.timestamp, quote: "выберем билеты в субботу" }],
+        },
+        {
+          kind: "activity",
+          title: "Планировали поездку",
+          summary: "Илья и Саша обсуждали поездку и выбор билетов.",
+          subject_ids: ["1", "2"],
+          importance: 3,
+          started_at: sources[0]!.timestamp,
+          ended_at: sources[1]!.timestamp,
+          evidence: [
+            { source_timestamp: sources[0]!.timestamp, quote: "поехать на Байкал" },
+            { source_timestamp: sources[1]!.timestamp, quote: "выберем билеты" },
+          ],
+        },
+      ],
+    },
+    sources,
+    "2026-08-26",
+  );
+
+  assert.equal(result.accepted.length, 3);
+  assert.equal(result.rejected.length, 1);
+  assert.deepEqual(result.accepted[0]?.subjects, [{ id: "1", name: "Илья" }]);
+  assert.match(result.rejected[0] ?? "", /not self-authored/u);
+  assert.deepEqual(requestedDays(sources, "all"), ["2026-08-26"]);
+  assert.equal(chunkTranscripts(sources, 100).length, 2);
+  assert.equal(hourlyChunks(sources, 10_000).length, 2);
+});
+
+test("person profiles are structured, updated in place and hide raw evidence from the agent", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-profiles-"));
+  const sources = [
+    {
+      timestamp: "2026-08-25T10:00:00.000Z",
+      date: "2026-08-25",
+      time: "16:00:00",
+      kind: "transcript" as const,
+      speaker: "Илья",
+      speaker_id: "1",
+      text: "Я вечером снова играл в Deadlock",
+    },
+    {
+      timestamp: "2026-08-26T10:00:00.000Z",
+      date: "2026-08-26",
+      time: "16:00:00",
+      kind: "transcript" as const,
+      speaker: "Илья",
+      speaker_id: "1",
+      text: "Вчера опять запустил Deadlock с друзьями",
+    },
+    {
+      timestamp: "2026-08-27T10:00:00.000Z",
+      date: "2026-08-27",
+      time: "16:00:00",
+      kind: "transcript" as const,
+      speaker: "Илья",
+      speaker_id: "1",
+      text: "Сейчас работаю над голосовым агентом для Discord",
+    },
+  ];
+  try {
+    const result = validateProfileProposal(
+      {
+        sections: {
+          games: [
+            {
+              summary: "Регулярно играет в Deadlock с друзьями.",
+              status: "recurring",
+              evidence: [
+                { source_timestamp: sources[0]!.timestamp, quote: "снова играл в Deadlock" },
+                { source_timestamp: sources[1]!.timestamp, quote: "опять запустил Deadlock" },
+              ],
+            },
+          ],
+          work_projects: [
+            {
+              summary: "Работает над голосовым Discord-агентом.",
+              status: "current",
+              evidence: [{ source_timestamp: sources[2]!.timestamp, quote: "голосовым агентом для Discord" }],
+            },
+          ],
+          life_stories: [],
+          current_challenges: [],
+          interests: [],
+          media: [
+            {
+              summary: "Интересуется научной фантастикой.",
+              status: "uncertain",
+              evidence: [{ source_timestamp: sources[0]!.timestamp, quote: "играл в Deadlock" }],
+            },
+          ],
+          plans: [],
+        },
+      },
+      sources,
+      "1",
+      "Илья",
+      new Date("2026-08-27T12:00:00.000Z"),
+    );
+
+    assert.equal(result.profile.sections.games.length, 1);
+    assert.equal(result.profile.sections.work_projects.length, 1);
+    assert.equal(result.profile.sections.media.length, 0);
+    assert.match(result.rejected[0] ?? "", /two different messages/u);
+
+    const path = join(directory, "profiles.json");
+    const store = new ProfileStore(path);
+    store.upsert(result.profile);
+    store.upsert({ ...result.profile, name: "Илья Новый", updated_at: "2026-08-27T13:00:00.000Z" });
+    const reloaded = new ProfileStore(path);
+    assert.equal(reloaded.profiles.length, 1);
+    assert.equal(reloaded.profiles[0]?.name, "Илья Новый");
+    assert.match(readFileSync(path, "utf8"), /снова играл в Deadlock/u);
+
+    const response = await createGetProfileTool(reloaded).execute("get-profile", { person: "1" });
+    const agentView = response.content[0]?.type === "text" ? response.content[0].text : "";
+    assert.doesNotMatch(agentView, /evidence|снова играл в Deadlock/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("sleep surfaces provider errors before retrying structured output", () => {
+  assert.throws(
+    () =>
+      structuredMemoryPayload({
+        content: [],
+        errorMessage: "Codex error: Unsupported parameter: temperature",
+        stopReason: "error",
+      }),
+    /Unsupported parameter: temperature/u,
+  );
+  assert.deepEqual(
+    structuredMemoryPayload({
+      content: [fauxToolCall("submit_memories", { memories: [] })],
+      stopReason: "toolUse",
+    }),
+    { memories: [] },
+  );
+});
+
+test("reflected memory persists metadata and deduplicates exact facts", () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-reflection-"));
+  try {
+    const path = join(directory, "memory.jsonl");
+    const store = new MemoryStore(path);
+    const input = {
+      kind: "person" as const,
+      fact: "Илья планирует в сентябре поехать на Байкал.",
+      subjects: [{ id: "1", name: "Илья" }],
+      importance: 5,
+      evidence: [
+        {
+          source_timestamp: "2026-08-26T10:00:00.000Z",
+          speaker_id: "1",
+          speaker: "Илья",
+          quote: "Я решил в сентябре поехать на Байкал",
+        },
+      ],
+      day: "2026-08-26",
+    };
+    store.rememberReflection(input);
+    store.rememberReflection(input);
+    store.rememberReflection({
+      ...input,
+      subjects: [{ id: "2", name: "Саша" }],
+      evidence: [{ ...input.evidence[0]!, speaker_id: "2", speaker: "Саша" }],
+    });
+    store.rememberReflection({
+      ...input,
+      kind: "activity",
+      title: "Планировали поездку",
+      fact: "Обсуждали поездку на Байкал.",
+      importance: 3,
+      started_at: input.evidence[0]!.source_timestamp,
+      ended_at: input.evidence[0]!.source_timestamp,
+    });
+
+    const reloaded = new MemoryStore(path);
+    assert.equal(reloaded.entries.length, 3);
+    assert.equal(reloaded.entries[0]?.kind, "person");
+    assert.deepEqual(reloaded.entries[0]?.subject_ids, ["1"]);
+    assert.equal(reloaded.entries[0]?.origin, "sleep");
+    assert.equal(reloaded.entries[2]?.title, "Планировали поездку");
+    assert.equal(reloaded.entries[2]?.started_at, input.evidence[0]!.source_timestamp);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
