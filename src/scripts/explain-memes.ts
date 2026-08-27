@@ -5,9 +5,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 import { isRecord } from "../common.js";
+import { dataPath } from "../config.js";
 
-const INPUT_FILE = "memes/images.jsonl";
-const OUTPUT_FILE = "memes/images_explained.jsonl";
+const MEMES_DIR = dataPath("memes");
+const INPUT_FILE = dataPath("memes", "images.jsonl");
+const OUTPUT_FILE = dataPath("memes", "images_explained.jsonl");
 const BASE_URL = (
   process.env["MEME_LLM_BASE_URL"] ??
   process.env["LLM_BASE_URL"] ??
@@ -151,8 +153,8 @@ function responseText(body: unknown): string {
 }
 
 async function explain(record: MemeRecord): Promise<MemeExplanation> {
-  const memesRoot = `${resolve("memes")}${sep}`;
-  const imagePath = resolve("memes", record.path);
+  const memesRoot = `${resolve(MEMES_DIR)}${sep}`;
+  const imagePath = resolve(MEMES_DIR, record.path);
   if (!imagePath.startsWith(memesRoot)) throw new Error(`image path escapes memes directory: ${record.path}`);
   const mime = record.content_type ?? "image/jpeg";
   if (!mime.startsWith("image/")) throw new Error(`invalid image content type: ${mime}`);

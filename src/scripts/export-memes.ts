@@ -14,8 +14,9 @@ import type {
 import { ChannelType, REST, Routes } from "discord.js";
 
 import { isRecord } from "../common.js";
+import { dataPath } from "../config.js";
 
-const OUTPUT_DIR = "memes";
+const OUTPUT_DIR = dataPath("memes");
 const IMAGE_DIR = join(OUTPUT_DIR, "images");
 const INDEX_FILE = join(OUTPUT_DIR, "images.jsonl");
 const IMAGE_EXTENSIONS = new Set([".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);

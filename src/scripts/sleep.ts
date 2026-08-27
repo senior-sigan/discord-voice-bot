@@ -717,7 +717,7 @@ async function main(): Promise<void> {
   const history = new HistoryStore(config.historyFile);
   const memory = new MemoryStore(config.memoryFile);
   const profiles = new ProfileStore(config.profilesFile);
-  const statePath = process.env["SLEEP_STATE_FILE"] ?? `${config.memoryFile}.sleep-state.json`;
+  const statePath = `${config.memoryFile}.sleep-state.json`;
   const state = loadState(statePath);
   const days = requestedDays(history.entries, process.argv[2]);
   const transcripts = history.entries.filter((entry) => entry.kind === "transcript");

@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 export interface AppConfig {
   discordToken: string;
   discordGuildId: string;
@@ -38,7 +40,7 @@ export function loadConfig(): AppConfig {
     fillerDir: process.env["FILLER_DIR"] ?? "assets/fillers",
     aiProvider: process.env["AI_PROVIDER"] ?? process.env["LLM_PROVIDER"] ?? "openai-compatible",
     ...(aiModel ? { aiModel } : {}),
-    aiAuthFile: process.env["PI_AUTH_FILE"] ?? "auth.json",
+    aiAuthFile: dataPath("auth.json"),
     openAiCompatibleBaseUrl: (
       process.env["OPENAI_COMPATIBLE_BASE_URL"] ??
       process.env["LLM_BASE_URL"] ??
@@ -47,10 +49,14 @@ export function loadConfig(): AppConfig {
     ...(openAiCompatibleApiKey ? { openAiCompatibleApiKey } : {}),
     aiContextWindow: Math.max(1_024, Number(process.env["AI_CONTEXT_WINDOW"] ?? 32_768) || 32_768),
     aiMaxTokens: Math.max(64, Number(process.env["AI_MAX_TOKENS"] ?? process.env["LLM_MAX_TOKENS"] ?? 1_024) || 1_024),
-    historyFile: process.env["HISTORY_FILE"] ?? "history.jsonl",
-    memoryFile: process.env["MEMORY_FILE"] ?? "memory.jsonl",
-    profilesFile: process.env["PROFILES_FILE"] ?? "profiles.json",
-    tasksFile: process.env["TASKS_FILE"] ?? "tasks.json",
+    historyFile: dataPath("history.jsonl"),
+    memoryFile: dataPath("memory.jsonl"),
+    profilesFile: dataPath("profiles.json"),
+    tasksFile: dataPath("tasks.json"),
     timezone: process.env["TIMEZONE"] ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
   };
+}
+
+export function dataPath(...parts: string[]): string {
+  return join(process.env["DATA_DIR"]?.trim() || ".data", ...parts);
 }

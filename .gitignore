@@ -2,13 +2,7 @@ models/
 node_modules/
 dist/
 recordings/
-history.jsonl
-memory.jsonl
-memory.jsonl.sleep-state.json
-profiles.json
-tasks.json
-auth.json
-memes/
+.data/
 references/
 ./voice-agents
 .env

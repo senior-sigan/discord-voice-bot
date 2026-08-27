@@ -6,6 +6,7 @@ import { Type } from "@earendil-works/pi-ai";
 import type { HistoryEntry } from "../agent/history.js";
 import { searchHistory } from "../agent/history.js";
 import { formatMessageTime, isRecord } from "../common.js";
+import { dataPath } from "../config.js";
 
 const parameters = Type.Object(
   {
@@ -23,7 +24,7 @@ interface IndexedMeme {
   raw: string;
 }
 
-export function createMemeSearchTool(path = "memes/images_explained.jsonl"): AgentTool<typeof parameters> {
+export function createMemeSearchTool(path = dataPath("memes", "images_explained.jsonl")): AgentTool<typeof parameters> {
   let memes: IndexedMeme[] | undefined;
   return {
     name: "search_memes",

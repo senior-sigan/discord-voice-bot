@@ -21,6 +21,7 @@ import { SkillStore } from "./agent/skills.js";
 import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/transcript.js";
 import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio.js";
 import { formatMessageTime } from "./common.js";
+import { dataPath } from "./config.js";
 import { TaskScheduler } from "./scheduler.js";
 import { isRetryableLlmError, parseExplanation, resizeImageForLlm } from "./scripts/explain-memes.js";
 import { imageFileName, isImageAttachment } from "./scripts/export-memes.js";
@@ -163,6 +164,17 @@ test("filler-only transcripts are ignored without hiding real speech", () => {
 
 test("message time contains only local time", () => {
   assert.equal(formatMessageTime(new Date(2026, 7, 24, 9, 5, 3)), "09:05:03");
+});
+
+test("data path uses the configured data directory", () => {
+  const previous = process.env["DATA_DIR"];
+  try {
+    process.env["DATA_DIR"] = "/tmp/voice-agent-data";
+    assert.equal(dataPath("memes", "images.jsonl"), "/tmp/voice-agent-data/memes/images.jsonl");
+  } finally {
+    if (previous === undefined) delete process.env["DATA_DIR"];
+    else process.env["DATA_DIR"] = previous;
+  }
 });
 
 test("scheduled tasks persist after execution and recurring tasks can be deleted", async () => {
