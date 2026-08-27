@@ -16,6 +16,8 @@ export interface AppConfig {
   historyFile: string;
   memoryFile: string;
   profilesFile: string;
+  tasksFile: string;
+  timezone: string;
 }
 
 export function loadConfig(): AppConfig {
@@ -48,5 +50,7 @@ export function loadConfig(): AppConfig {
     historyFile: process.env["HISTORY_FILE"] ?? "history.jsonl",
     memoryFile: process.env["MEMORY_FILE"] ?? "memory.jsonl",
     profilesFile: process.env["PROFILES_FILE"] ?? "profiles.json",
+    tasksFile: process.env["TASKS_FILE"] ?? "tasks.json",
+    timezone: process.env["TIMEZONE"] ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
   };
 }

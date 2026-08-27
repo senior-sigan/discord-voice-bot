@@ -14,6 +14,7 @@ export type ToolCallListener = (name: string, args: string, announcement: string
 export class AgentRuntime {
   private readonly agent: Agent;
   private readonly toolStartedAt = new Map<string, number>();
+  private completionQueue: Promise<void> = Promise.resolve();
   private onToolCall: ToolCallListener | undefined;
   private latestAssistantText = "";
 
@@ -38,13 +39,27 @@ export class AgentRuntime {
     this.agent.subscribe((event) => this.handleEvent(event));
   }
 
-  async complete(context: string, onToolCall?: ToolCallListener): Promise<string> {
+  complete(context: string, onToolCall?: ToolCallListener): Promise<string> {
+    return this.enqueue(() =>
+      this.completePrompt(`Недавний разговор:\n${context}\n\nОтветь на обращение к Олегу.`, onToolCall),
+    );
+  }
+
+  completeScheduled(instruction: string): Promise<string> {
+    return this.enqueue(() =>
+      this.completePrompt(
+        `Сработала сохранённая пользовательская задача. Выполни её сейчас, используя инструменты при необходимости. Если это напоминание — естественно напомни об этом. Не создавай новое расписание, если инструкция явно этого не требует.\n\nЗадача: ${instruction}`,
+      ),
+    );
+  }
+
+  private async completePrompt(prompt: string, onToolCall?: ToolCallListener): Promise<string> {
     this.agent.reset();
     this.agent.state.systemPrompt = this.systemPrompt();
     this.onToolCall = onToolCall;
     this.latestAssistantText = "";
     try {
-      await this.agent.prompt(`Недавний разговор:\n${context}\n\nОтветь на обращение к Олегу.`);
+      await this.agent.prompt(prompt);
       const final = this.agent.state.messages.findLast((message) => message.role === "assistant");
       if (final?.role !== "assistant") throw new Error("Pi agent returned no assistant message");
       const text = contentText(final.content).trim();
@@ -53,6 +68,15 @@ export class AgentRuntime {
     } finally {
       this.onToolCall = undefined;
     }
+  }
+
+  private enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.completionQueue.then(work, work);
+    this.completionQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 
   async toolAnnouncement(context: string, tool: string, args: string): Promise<string> {

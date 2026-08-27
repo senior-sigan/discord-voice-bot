@@ -22,6 +22,7 @@
     "@discordjs/voice": "0.19.2",
     "@earendil-works/pi-agent-core": "0.84.3",
     "@earendil-works/pi-ai": "0.84.3",
+    "croner": "10.0.1",
     "discord.js": "14.27.0",
     "sherpa-onnx-node": "1.13.6"
   },

@@ -10,6 +10,7 @@ import { createAiRuntime } from "./ai/runtime.js";
 import { errorMessage, log } from "./common.js";
 import { loadConfig } from "./config.js";
 import { DiscordBot } from "./discord/bot.js";
+import { TaskScheduler } from "./scheduler.js";
 import { ParakeetTranscriber } from "./stt/index.js";
 import { createTools } from "./tools/index.js";
 import { createTts, loadFillers } from "./tts/index.js";
@@ -25,29 +26,33 @@ async function run(): Promise<void> {
   const tts = await createTts(config.ttsModelDir);
   const transcriber = await ParakeetTranscriber.create(config.sttModelDir, config.vadModel, config.vadThreshold);
   const discord = new DiscordBot(config.discordToken, config.discordGuildId, transcriber);
+  let voiceAgent: VoiceAgent;
+  const scheduler = new TaskScheduler(config.tasksFile, (task) =>
+    voiceAgent.runScheduledTask(config.discordGuildId, task.instruction),
+  );
   const agentRuntime = new AgentRuntime(
     ai.models,
     ai.model,
-    createTools(history, memory, profiles, skills, discord),
+    createTools(history, memory, profiles, skills, discord, scheduler, config.timezone),
     history,
     skills,
   );
-  discord.setAgent(
-    new VoiceAgent(
-      agentRuntime,
-      history,
-      tts,
-      loadFillers(config.fillerDir),
-      (guildId, audio) => discord.speak(guildId, audio),
-      (guildId) => discord.interrupt(guildId),
-    ),
+  voiceAgent = new VoiceAgent(
+    agentRuntime,
+    history,
+    tts,
+    loadFillers(config.fillerDir),
+    (guildId, audio) => discord.speak(guildId, audio),
+    (guildId) => discord.interrupt(guildId),
   );
+  discord.setAgent(voiceAgent);
 
   let shuttingDown = false;
   const shutdown = (signal: NodeJS.Signals): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     log("info", "shutting down", { signal });
+    scheduler.stop();
     void discord
       .stop()
       .catch((error: unknown) => log("error", "shutdown failed", { error: errorMessage(error) }))
@@ -56,6 +61,7 @@ async function run(): Promise<void> {
   process.once("SIGINT", () => shutdown("SIGINT"));
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   await discord.start(process.argv.includes("--autojoin") ? "master" : undefined);
+  scheduler.start();
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

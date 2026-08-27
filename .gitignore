@@ -6,6 +6,7 @@ history.jsonl
 memory.jsonl
 memory.jsonl.sleep-state.json
 profiles.json
+tasks.json
 auth.json
 memes/
 references/

@@ -64,6 +64,14 @@ export class VoiceAgent {
       });
   }
 
+  async runScheduledTask(guildId: string, instruction: string): Promise<void> {
+    log("info", "scheduled task started", { instruction });
+    const answer = await this.runtime.completeScheduled(instruction);
+    this.history.appendMessage("assistant", "Олег", answer);
+    await this.speak(guildId, this.tts.synthesize(answer));
+    log("info", "scheduled task completed", { answer });
+  }
+
   clear(guildId: string): void {
     this.generations.set(guildId, (this.generations.get(guildId) ?? 0) + 1);
     this.responding.delete(guildId);

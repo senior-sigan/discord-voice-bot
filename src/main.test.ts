@@ -21,6 +21,7 @@ import { SkillStore } from "./agent/skills.js";
 import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/transcript.js";
 import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio.js";
 import { formatMessageTime } from "./common.js";
+import { TaskScheduler } from "./scheduler.js";
 import { isRetryableLlmError, parseExplanation, resizeImageForLlm } from "./scripts/explain-memes.js";
 import { imageFileName, isImageAttachment } from "./scripts/export-memes.js";
 import {
@@ -39,6 +40,7 @@ import { createRememberTool, createSearchMemoryTool } from "./tools/memory.js";
 import { createGetProfileTool } from "./tools/profiles.js";
 import { createRecallHistoryTool } from "./tools/recall.js";
 import { createSkillTools } from "./tools/skills.js";
+import { createTaskTools } from "./tools/tasks.js";
 import { isSafePublicUrl } from "./tools/web.js";
 import { QwenTts } from "./tts/qwentts.js";
 
@@ -163,6 +165,60 @@ test("message time contains only local time", () => {
   assert.equal(formatMessageTime(new Date(2026, 7, 24, 9, 5, 3)), "09:05:03");
 });
 
+test("scheduled tasks persist after execution and recurring tasks can be deleted", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-tasks-"));
+  const path = join(directory, "tasks.json");
+  let scheduler: TaskScheduler | undefined;
+  try {
+    let taskRan!: () => void;
+    const ran = new Promise<void>((resolve) => {
+      taskRan = resolve;
+    });
+    scheduler = new TaskScheduler(path, async () => taskRan());
+    scheduler.start();
+    const once = scheduler.create({
+      instruction: "Напомни проверить тест",
+      timezone: "Asia/Omsk",
+      run_at: new Date(Date.now() + 100).toISOString(),
+    });
+    const recurring = scheduler.create({
+      instruction: "Каждые пятнадцать минут сообщай статус",
+      timezone: "Asia/Omsk",
+      cron: "*/15 * * * *",
+    });
+
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        ran,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => reject(new Error("scheduled task timeout")), 2_000);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(scheduler.tasks.find((task) => task.id === once.id)?.status, "completed");
+    assert.equal(scheduler.tasks.find((task) => task.id === once.id)?.runs, 1);
+    assert.equal(
+      scheduler.list().some((task) => task.id === once.id),
+      false,
+    );
+    assert.equal(createTaskTools(scheduler, "Asia/Omsk").length, 3);
+    scheduler.stop();
+
+    const reloaded = new TaskScheduler(path, async () => undefined);
+    assert.equal(reloaded.tasks.find((task) => task.id === once.id)?.status, "completed");
+    assert.equal(reloaded.delete(recurring.id)?.kind, "cron");
+    assert.equal((JSON.parse(readFileSync(path, "utf8")) as unknown[]).length, 1);
+  } finally {
+    scheduler?.stop();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("Pi agent executes a tool and continues to the final answer", async () => {
   const directory = mkdtempSync(join(tmpdir(), "voice-agent-pi-"));
   try {
@@ -185,6 +241,8 @@ test("Pi agent executes a tool and continues to the final answer", async () => {
     assert.equal(await runtime.complete("[10:00:00] Илья: Олег, который час?", (name) => calls.push(name)), "Готово.");
     assert.deepEqual(calls, ["get_current_datetime"]);
     assert.equal(history.entries.at(-1)?.tool, "get_current_datetime");
+    faux.appendResponses([fauxAssistantMessage("Напоминаю проверить тест.")]);
+    assert.equal(await runtime.completeScheduled("Напомни проверить тест"), "Напоминаю проверить тест.");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
