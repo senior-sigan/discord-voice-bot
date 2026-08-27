@@ -37,13 +37,65 @@ Discord voice → VAD/STT → history.jsonl → LLM + tools → TTS → Discord 
 - один LLM backend и один TTS backend;
 - FFmpeg — только для подготовки каталога мемов.
 
-Автоматического скачивания speech-моделей пока нет. По умолчанию ожидаются:
+## Полностью локальный запуск на 16 ГБ
 
-```text
-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/
-models/vad/silero_vad_v5.onnx
-models/vits-piper-ru_RU-ruslan-medium/
+Этот профиль оставляет STT и Piper на CPU, а LLM отдаёт доступному GPU. Он рассчитан на MacBook M1 с 16 ГБ общей памяти и ПК с одной видеокартой уровня RTX 5060 Ti 16 ГБ.
+
+### Скачать STT, VAD и Piper TTS
+
+Из корня проекта скачайте официальные модели Sherpa ONNX:
+
+```bash
+mkdir -p models/vad
+
+curl -L https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2 -o models/parakeet.tar.bz2
+tar -xjf models/parakeet.tar.bz2 -C models
+
+curl -L https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx -o models/vad/silero_vad_v5.onnx
+
+curl -L https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ru_RU-ruslan-medium.tar.bz2 -o models/piper.tar.bz2
+tar -xjf models/piper.tar.bz2 -C models
+
+rm models/parakeet.tar.bz2 models/piper.tar.bz2
 ```
+
+Источники: [Parakeet TDT 0.6B v3 int8](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2), [Silero VAD](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx), [Piper ru_RU-ruslan-medium](https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ru_RU-ruslan-medium.tar.bz2). Пути после распаковки уже совпадают со значениями по умолчанию в конфиге.
+
+### Запустить LLM в LM Studio
+
+Установите [LM Studio](https://lmstudio.ai/download) и его CLI:
+
+```bash
+npx lmstudio install-cli
+lms get google/gemma-3n-e4b
+lms load google/gemma-3n-e4b --identifier oleg-local --context-length 8192 --gpu max
+lms server start --port 1234
+```
+
+Рекомендуемая модель — [Gemma 3n E4B](https://lmstudio.ai/models/google/gemma-3n-e4b), оптимизированная Google для ноутбуков и других слабых устройств. В LM Studio выберите MLX 4-bit на Apple Silicon или GGUF Q4 на NVIDIA. Модель имеет 4B эффективных параметров, требует от 4 ГБ памяти и поддерживает контекст до 32K; для голосового агента начните с 8K ради меньшей задержки и расхода памяти.
+
+После первого `npm start` выставьте в `.data/config.json`:
+
+```json
+{
+  "defaults": {
+    "ai": {
+      "provider": "openai-compatible",
+      "model": "oleg-local",
+      "openai_compatible": {
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 8192,
+        "max_tokens": 512
+      }
+    },
+    "tts": {
+      "backend": "piper"
+    }
+  }
+}
+```
+
+Это фрагмент: не удаляйте остальные поля созданного конфига. Перед запуском бота проверьте сервер командой `curl http://127.0.0.1:1234/v1/models`. На 16 ГБ не увеличивайте контекст без необходимости: KV-cache конкурирует за память с моделью, Parakeet и самим ботом. Режим сна и сложные цепочки tools на E4B могут быть менее надёжны, чем обычные короткие голосовые ответы.
 
 ## Быстрый запуск
 
