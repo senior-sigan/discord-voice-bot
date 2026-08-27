@@ -51,7 +51,8 @@ export class VoiceAgent {
     const version = (this.conversationVersions.get(transcript.guildId) ?? 0) + 1;
     this.conversationVersions.set(transcript.guildId, version);
     this.cancelAutoParticipationTimer(transcript.guildId);
-    if (hasStopCommand(transcript.text)) {
+    const wakeWords = this.config.settings.agent.wake_words;
+    if (hasStopCommand(transcript.text, wakeWords)) {
       this.generations.set(transcript.guildId, (this.generations.get(transcript.guildId) ?? 0) + 1);
       this.responding.delete(transcript.guildId);
       this.runtime.abort();
@@ -59,7 +60,7 @@ export class VoiceAgent {
       log("info", "speech interrupted", { user: transcript.user });
       return;
     }
-    const wakeWord = hasWakeWord(transcript.text);
+    const wakeWord = hasWakeWord(transcript.text, wakeWords);
     const mode = wakeWord ? autoParticipationCommand(transcript.text) : undefined;
     if (mode) {
       this.setAutoParticipationMode(transcript, mode);

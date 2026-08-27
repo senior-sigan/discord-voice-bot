@@ -145,22 +145,26 @@ test("VAD gates audio and resets between chunks", () => {
 });
 
 test("wake word tolerates common STT variants as separate words", () => {
-  assert.equal(hasWakeWord("Олег, что ты думаешь?"), true);
-  assert.equal(hasWakeWord("Что ты думаешь, олег?"), true);
-  assert.equal(hasWakeWord("Олега, что ты думаешь?"), true);
-  assert.equal(hasWakeWord("Ольга, что ты думаешь?"), true);
-  assert.equal(hasWakeWord("Это олегов ответ"), false);
-  assert.equal(hasWakeWord("Это Ольгин ответ"), false);
+  const wakeWords = ["олег", "олега", "ольга", "борис"];
+  assert.equal(hasWakeWord("Олег, что ты думаешь?", wakeWords), true);
+  assert.equal(hasWakeWord("Что ты думаешь, олег?", wakeWords), true);
+  assert.equal(hasWakeWord("Олега, что ты думаешь?", wakeWords), true);
+  assert.equal(hasWakeWord("Ольга, что ты думаешь?", wakeWords), true);
+  assert.equal(hasWakeWord("Борис, что ты думаешь?", wakeWords), true);
+  assert.equal(hasWakeWord("Это олегов ответ", wakeWords), false);
+  assert.equal(hasWakeWord("Это Ольгин ответ", wakeWords), false);
 });
 
 test("stop command requires Oleg and an explicit stop word", () => {
-  assert.equal(hasStopCommand("Олег стоп"), true);
-  assert.equal(hasStopCommand("Олег СТОЙ"), true);
-  assert.equal(hasStopCommand("олег, остановись!"), true);
-  assert.equal(hasStopCommand("Олег — хватит."), true);
-  assert.equal(hasStopCommand("Ольга, стой!"), true);
-  assert.equal(hasStopCommand("Стой, Олег"), false);
-  assert.equal(hasStopCommand("Олег, продолжай"), false);
+  const wakeWords = ["олег", "ольга", "борис"];
+  assert.equal(hasStopCommand("Олег стоп", wakeWords), true);
+  assert.equal(hasStopCommand("Олег СТОЙ", wakeWords), true);
+  assert.equal(hasStopCommand("олег, остановись!", wakeWords), true);
+  assert.equal(hasStopCommand("Олег — хватит.", wakeWords), true);
+  assert.equal(hasStopCommand("Ольга, стой!", wakeWords), true);
+  assert.equal(hasStopCommand("Борис, стой!", wakeWords), true);
+  assert.equal(hasStopCommand("Стой, Олег", wakeWords), false);
+  assert.equal(hasStopCommand("Олег, продолжай", wakeWords), false);
 });
 
 test("automatic participation commands and decisions are strict", () => {

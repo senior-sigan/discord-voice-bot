@@ -7,6 +7,13 @@ import { isRecord, log } from "./common.js";
 
 const autoParticipationModeSchema = z.enum(["off", "shadow", "on"]);
 const nonBlankString = z.string().trim().min(1);
+const DEFAULT_WAKE_WORDS = ["олег", "олёг", "олега", "олёга", "ольга"];
+const wakeWordsSchema = z
+  .array(nonBlankString)
+  .min(1)
+  .refine((words) => new Set(words.map((word) => word.toLocaleLowerCase("ru-RU"))).size === words.length, {
+    message: "Wake words must be unique",
+  });
 const qwenVoiceSchema = nonBlankString.regex(/^[a-z0-9_-]+$/iu);
 const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
@@ -58,6 +65,7 @@ const settingsSchema = z.strictObject({
   agent: z.strictObject({
     timezone: nonBlankString,
     filler_dir: nonBlankString,
+    wake_words: wakeWordsSchema.default(DEFAULT_WAKE_WORDS),
     wake_cooldown_ms: nonNegativeInteger,
     context_chars: positiveInteger.min(1_000),
     greet_on_join: z.boolean().default(true),
@@ -128,6 +136,7 @@ const INITIAL_DEFAULTS: RuntimeSettings = {
   agent: {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     filler_dir: "assets/fillers",
+    wake_words: DEFAULT_WAKE_WORDS,
     wake_cooldown_ms: 5_000,
     context_chars: 12_000,
     greet_on_join: true,
