@@ -170,13 +170,13 @@ test("automatic participation commands and decisions are strict", () => {
   assert.equal(autoParticipationCommand("Олег, подключайся к разговору"), undefined);
   assert.deepEqual(
     parseAutoParticipationVerdict(
-      { decision: "join", reason: "open_question", reply_intent: "Коротко ответить на вопрос" },
+      { decision: "join", reason: "brief_reaction", reply_intent: "Коротко отреагировать" },
       "test/model",
     ),
     {
       decision: "join",
-      reason: "open_question",
-      replyIntent: "Коротко ответить на вопрос",
+      reason: "brief_reaction",
+      replyIntent: "Коротко отреагировать",
       model: "test/model",
     },
   );
@@ -353,6 +353,13 @@ test("config creates visible defaults and persists validated overrides", () => {
     assert.deepEqual(initial.overrides, {});
     assert.equal(config.settings.agent.greet_on_join, true);
     assert.equal(config.settings.agent.follow_up_window_ms, 30_000);
+    assert.deepEqual(config.settings.agent.auto_participation, {
+      mode: "off",
+      silence_ms: 1_500,
+      check_interval_ms: 5_000,
+      cooldown_ms: 30_000,
+      context_ms: 300_000,
+    });
 
     config.setOverride("ai.model", "gpt-5.6-sol");
     config.setOverride("tts.qwen.voice", "arthas");

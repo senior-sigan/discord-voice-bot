@@ -134,9 +134,9 @@ const INITIAL_DEFAULTS: RuntimeSettings = {
     follow_up_window_ms: 30_000,
     auto_participation: {
       mode: "off",
-      silence_ms: 4_000,
-      check_interval_ms: 15_000,
-      cooldown_ms: 120_000,
+      silence_ms: 1_500,
+      check_interval_ms: 5_000,
+      cooldown_ms: 30_000,
       context_ms: 300_000,
     },
   },

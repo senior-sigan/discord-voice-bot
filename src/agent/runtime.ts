@@ -89,7 +89,7 @@ export class AgentRuntime {
   completeProactive(context: string, intent: string, onToolCall?: ToolCallListener): Promise<string> {
     return this.enqueue(() =>
       this.completePrompt(
-        `Недавний разговор:\n${context}\n\nТы сам решил уместно включиться. Намерение: ${intent}\nОтветь естественно и по делу, максимум двумя короткими предложениями. Не упоминай автоматический режим или это решение.`,
+        `Недавний разговор:\n${context}\n\nТы сам решил уместно включиться. Намерение: ${intent}\nОтветь одной естественной репликой, обычно 2–12 слов и максимум одним коротким предложением. Не упоминай автоматический режим или это решение.`,
         onToolCall,
       ),
     );

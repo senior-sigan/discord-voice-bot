@@ -327,7 +327,7 @@ export class VoiceAgent {
       return;
     }
 
-    const discarded = this.discardedAutoParticipationReason(guildId, version, mode);
+    const discarded = this.discardedAutoParticipationReason(guildId, mode);
     const acted =
       mode === "on" && verdict.decision === "join" && verdict.replyIntent !== undefined && discarded === undefined;
     log("info", "auto participation decision", {
@@ -367,13 +367,10 @@ export class VoiceAgent {
 
   private discardedAutoParticipationReason(
     guildId: string,
-    version: number,
     mode: AutoParticipationMode,
-  ): "conversation_changed" | "mode_changed" | "speech_started" | "busy" | undefined {
-    if (this.conversationVersions.get(guildId) !== version) return "conversation_changed";
+  ): "mode_changed" | "busy" | undefined {
     if (this.config.settings.agent.auto_participation.mode !== mode) return "mode_changed";
     if (this.responding.has(guildId)) return "busy";
-    if (!this.isVoiceQuiet(guildId)) return "speech_started";
     return undefined;
   }
 }
