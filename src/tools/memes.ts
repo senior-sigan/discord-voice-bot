@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
@@ -30,7 +31,7 @@ export function createMemeSearchTool(path = dataPath("memes", "images_explained.
     name: "search_memes",
     label: "Поиск мемов",
     description:
-      "Ищет мемы fuzzy-поиском только по их описаниям. Можно ограничить поиск датой или годом. Возвращает до пяти исходных JSONL-строк.",
+      "Ищет мемы fuzzy-поиском только по их описаниям. Можно ограничить поиск датой или годом. Возвращает до пяти JSONL-строк; готовое абсолютное поле path передавай в discord_send_message как image_path.",
     parameters,
     async execute(_toolCallId, args) {
       memes ??= loadMemes(path);
@@ -58,6 +59,7 @@ export function createMemeSearchTool(path = dataPath("memes", "images_explained.
 }
 
 function loadMemes(path: string): IndexedMeme[] {
+  const directory = dirname(path);
   const memes = readFileSync(path, "utf8")
     .split("\n")
     .flatMap((raw) => {
@@ -69,9 +71,13 @@ function loadMemes(path: string): IndexedMeme[] {
         }
         const timestamp = new Date(value["timestamp"]);
         if (Number.isNaN(timestamp.getTime())) return [];
+        const result =
+          typeof value["path"] === "string"
+            ? JSON.stringify({ ...value, path: resolve(directory, value["path"]) })
+            : raw;
         return [
           {
-            raw,
+            raw: result,
             entry: {
               timestamp: value["timestamp"],
               date: localDate(timestamp),

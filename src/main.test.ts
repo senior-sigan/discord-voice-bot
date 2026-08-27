@@ -813,9 +813,10 @@ test("reflected memory persists metadata and deduplicates exact facts", () => {
   }
 });
 
-test("meme search uses descriptions, natural dates, and returns raw JSONL", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "voice-agent-meme-search-"));
+test("meme search uses descriptions, natural dates, and returns sendable image paths", async () => {
+  const directory = mkdtempSync(join(process.cwd(), ".meme-search-"));
   const path = join(directory, "memes.jsonl");
+  const imagePath = join(directory, "meme.webp");
   const previousYear = new Date().getFullYear() - 1;
   const ignored = JSON.stringify({
     timestamp: `${previousYear}-05-01T10:00:00Z`,
@@ -823,24 +824,28 @@ test("meme search uses descriptions, natural dates, and returns raw JSONL", asyn
     use_for: "Когда нужен котёнок за рулём.",
     tags: ["котёнок", "автомобиль"],
   });
-  const expected = JSON.stringify({
+  const expected = {
     timestamp: `${previousYear}-06-01T10:00:00Z`,
     description: "Котёнок сидит за рулём автомобиля и серьёзно смотрит вперёд.",
     use_for: "Когда уверенно ведёшь проект.",
     tags: ["водитель"],
-  });
+    path: "meme.webp",
+  };
   const current = JSON.stringify({
     timestamp: `${previousYear + 1}-06-01T10:00:00Z`,
     description: "Котёнок сидит за рулём автомобиля.",
   });
   try {
-    writeFileSync(path, `${ignored}\n${expected}\n${current}\n`);
+    writeFileSync(imagePath, "image");
+    writeFileSync(path, `${ignored}\n${JSON.stringify(expected)}\n${current}\n`);
     const result = await createMemeSearchTool(path).execute("test-memes", {
       query: "найди мем про котенка в прошлом году",
       limit: 5,
     });
-    assert.equal(result.content[0]?.type === "text" ? result.content[0].text : "", expected);
-    assert.deepEqual((result.details as { results: string[] }).results, [expected]);
+    const normalized = JSON.stringify({ ...expected, path: imagePath });
+    assert.equal(result.content[0]?.type === "text" ? result.content[0].text : "", normalized);
+    assert.deepEqual((result.details as { results: string[] }).results, [normalized]);
+    assert.equal(safeImagePath(imagePath), imagePath);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
