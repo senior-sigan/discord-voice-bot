@@ -726,7 +726,9 @@ test("person profiles are structured, updated in place and hide raw evidence fro
     assert.equal(reloaded.profiles[0]?.name, "Илья Новый");
     assert.match(readFileSync(path, "utf8"), /снова играл в Deadlock/u);
 
-    const response = await createGetProfileTool(reloaded).execute("get-profile", { person: "1" });
+    const profileTool = createGetProfileTool(reloaded);
+    assert.match(profileTool.description, /Илья Новый \(1\)/u);
+    const response = await profileTool.execute("get-profile", { person: "1" });
     const agentView = response.content[0]?.type === "text" ? response.content[0].text : "";
     assert.doesNotMatch(agentView, /evidence|снова играл в Deadlock/u);
   } finally {

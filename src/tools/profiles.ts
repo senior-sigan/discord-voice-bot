@@ -13,11 +13,11 @@ const parameters = Type.Object(
 );
 
 export function createGetProfileTool(profiles: ProfileStore): AgentTool<typeof parameters> {
+  const catalog = profiles.profiles.map(({ name, user_id }) => `${name} (${user_id})`).join(", ");
   return {
     name: "get_person_profile",
     label: "Посмотреть профиль участника",
-    description:
-      "Возвращает структурированный профиль участника: игры, работа, жизненные истории, текущие сложности, интересы, медиа и планы. Используй только когда это помогает текущему вопросу; не притягивай детали профиля к разговору без причины.",
+    description: `Возвращает структурированный профиль участника: игры, работа, жизненные истории, текущие сложности, интересы, медиа и планы. Сохранённые профили: ${catalog || "нет"}. Если имя произнесено иначе, выбери из списка наиболее вероятного участника и передай его точное имя или userId. Используй только когда это помогает текущему вопросу; не притягивай детали профиля к разговору без причины.`,
     parameters,
     async execute(_toolCallId, args) {
       const matches = profiles.find(args.person).map(profileView);
