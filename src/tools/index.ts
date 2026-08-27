@@ -13,6 +13,7 @@ import { createMemeSearchTool } from "./memes.js";
 import { createRememberTool, createSearchMemoryTool } from "./memory.js";
 import { createGetProfileTool } from "./profiles.js";
 import { createRecallHistoryTool } from "./recall.js";
+import { keepSilenceTool } from "./silence.js";
 import { createSkillTools } from "./skills.js";
 import { createTaskTools } from "./tasks.js";
 import { textResult } from "./types.js";
@@ -38,6 +39,7 @@ export function createTools(
     createRememberTool(memory, history),
     createSearchMemoryTool(memory),
     createGetProfileTool(profiles),
+    keepSilenceTool,
     createMemeSearchTool(),
     ...createTaskTools(scheduler, config.settings.agent.timezone),
     ...createDiscordTools(discord),

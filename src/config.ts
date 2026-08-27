@@ -61,6 +61,7 @@ const settingsSchema = z.strictObject({
     wake_cooldown_ms: nonNegativeInteger,
     context_chars: positiveInteger.min(1_000),
     greet_on_join: z.boolean().default(true),
+    follow_up_window_ms: nonNegativeInteger.default(30_000),
     auto_participation: z.strictObject({
       mode: autoParticipationModeSchema,
       silence_ms: nonNegativeInteger,
@@ -130,6 +131,7 @@ const INITIAL_DEFAULTS: RuntimeSettings = {
     wake_cooldown_ms: 5_000,
     context_chars: 12_000,
     greet_on_join: true,
+    follow_up_window_ms: 30_000,
     auto_participation: {
       mode: "off",
       silence_ms: 4_000,
@@ -179,6 +181,7 @@ export class AppConfig {
       tts_voice: this.effectiveSettings.tts.qwen.voice,
       auto_participation: this.effectiveSettings.agent.auto_participation.mode,
       greet_on_join: this.effectiveSettings.agent.greet_on_join,
+      follow_up_window_ms: this.effectiveSettings.agent.follow_up_window_ms,
     });
   }
 

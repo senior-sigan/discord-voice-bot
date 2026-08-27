@@ -24,6 +24,7 @@ export class AgentRuntime {
   private completionQueue: Promise<void> = Promise.resolve();
   private onToolCall: ToolCallListener | undefined;
   private latestAssistantText = "";
+  private keepSilenceRequested = false;
   private model: Model<Api>;
 
   get modelName(): string {
@@ -94,6 +95,22 @@ export class AgentRuntime {
     );
   }
 
+  async completeFollowUp(
+    context: string,
+    user: string,
+    text: string,
+    onToolCall?: ToolCallListener,
+  ): Promise<string | undefined> {
+    const answer = await this.enqueue(() =>
+      this.completePrompt(
+        `Недавний разговор:\n${context}\n\nОткрыто follow-up-окно после ответа Олега. Последняя реплика ${user}: ${text}\nЕсли это обращение к Олегу или очевидное продолжение предыдущего запроса — ответь и выполни нужные действия. Если человек говорит не Олегу, вызови только keep_silence и ничего не отвечай. Не считай одну лишь близость по времени обращением к Олегу.`,
+        onToolCall,
+        true,
+      ),
+    );
+    return answer || undefined;
+  }
+
   async decideAutoParticipation(context: string): Promise<AutoParticipationVerdict> {
     const response = await this.models.completeSimple(
       this.model,
@@ -123,13 +140,15 @@ export class AgentRuntime {
     );
   }
 
-  private async completePrompt(prompt: string, onToolCall?: ToolCallListener): Promise<string> {
+  private async completePrompt(prompt: string, onToolCall?: ToolCallListener, allowSilence = false): Promise<string> {
     this.agent.reset();
     this.agent.state.systemPrompt = this.systemPrompt();
     this.onToolCall = onToolCall;
     this.latestAssistantText = "";
+    this.keepSilenceRequested = false;
     try {
       await this.agent.prompt(prompt);
+      if (allowSilence && this.keepSilenceRequested) return "";
       const final = this.agent.state.messages.findLast((message) => message.role === "assistant");
       if (final?.role !== "assistant") throw new Error("Pi agent returned no assistant message");
       const text = contentText(final.content).trim();
@@ -185,6 +204,7 @@ export class AgentRuntime {
     }
     if (event.type === "tool_execution_start") {
       const args = JSON.stringify(event.args);
+      if (event.toolName === "keep_silence") this.keepSilenceRequested = true;
       this.toolStartedAt.set(event.toolCallId, performance.now());
       log("info", "tool called", { tool: event.toolName, arguments: event.args });
       try {

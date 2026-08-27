@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import test from "node:test";
 
 import {
@@ -21,6 +22,7 @@ import { ProfileStore } from "./agent/profiles.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { SkillStore } from "./agent/skills.js";
 import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/transcript.js";
+import { VoiceAgent } from "./agent/voice-agent.js";
 import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio.js";
 import { formatMessageTime } from "./common.js";
 import { AppConfig, dataPath } from "./config.js";
@@ -43,9 +45,11 @@ import { createMemeSearchTool } from "./tools/memes.js";
 import { createRememberTool, createSearchMemoryTool } from "./tools/memory.js";
 import { createGetProfileTool } from "./tools/profiles.js";
 import { createRecallHistoryTool } from "./tools/recall.js";
+import { keepSilenceTool } from "./tools/silence.js";
 import { createSkillTools } from "./tools/skills.js";
 import { createTaskTools } from "./tools/tasks.js";
 import { isSafePublicUrl } from "./tools/web.js";
+import type { Tts, VoiceAudio } from "./tts/index.js";
 import { fillerDirectory } from "./tts/index.js";
 import { QwenTts } from "./tts/qwentts.js";
 
@@ -181,6 +185,80 @@ test("automatic participation commands and decisions are strict", () => {
   );
 });
 
+test("the same user gets one silent-capable follow-up turn after Oleg answers", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-follow-up-"));
+  try {
+    const history = new HistoryStore(join(directory, "history.jsonl"));
+    const config = new AppConfig(directory, { discordToken: "test" });
+    let followUpCalled = (): void => undefined;
+    const followUp = new Promise<void>((resolve) => {
+      followUpCalled = resolve;
+    });
+    let finishFollowUp = (_answer: string | undefined): void => undefined;
+    const followUpResult = new Promise<string | undefined>((resolve) => {
+      finishFollowUp = resolve;
+    });
+    let aborted = 0;
+    const runtime = {
+      complete: async () => "Первый ответ.",
+      completeFollowUp: (_context: string, user: string, text: string) => {
+        assert.equal(user, "Илья");
+        assert.equal(text, "Напиши это сюда.");
+        followUpCalled();
+        return followUpResult;
+      },
+      abort: () => {
+        aborted += 1;
+      },
+    } as unknown as AgentRuntime;
+    const tts: Tts = {
+      synthesize: () => ({ stream: Readable.from([]), done: Promise.resolve(0), cancel: () => undefined }),
+    };
+    const filler = { samples: new Float32Array(), sampleRate: 24_000 };
+    let spoken = 0;
+    let stopped = 0;
+    let directAnswerSpoken = (): void => undefined;
+    const directAnswer = new Promise<void>((resolve) => {
+      directAnswerSpoken = resolve;
+    });
+    const agent = new VoiceAgent(
+      runtime,
+      history,
+      tts,
+      () => [filler],
+      async (_guildId: string, _audio: VoiceAudio) => {
+        spoken += 1;
+        if (spoken === 2) directAnswerSpoken();
+      },
+      () => {
+        stopped += 1;
+      },
+      config,
+      () => true,
+    );
+
+    const base = { guildId: "guild", userId: "1", user: "Илья", timestamp: new Date().toISOString() };
+    agent.onTranscript({ ...base, text: "Олег, ты можешь написать сообщение?" });
+    await directAnswer;
+    await new Promise((resolve) => setImmediate(resolve));
+    agent.onTranscript({ ...base, text: "Напиши это сюда." });
+    await followUp;
+    agent.onTranscript({ ...base, userId: "2", user: "Игорь", text: "Я его перебиваю." });
+    assert.equal(stopped, 0);
+    assert.equal(aborted, 0);
+    agent.onTranscript({ ...base, text: "Олег, стой." });
+    finishFollowUp(undefined);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(spoken, 2);
+    assert.equal(stopped, 1);
+    assert.equal(aborted, 1);
+    assert.equal(history.entries.filter((entry) => entry.kind === "assistant").length, 1);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("filler-only transcripts are ignored without hiding real speech", () => {
   assert.equal(isFillerOnlyTranscript("Yeah. Uh. Okay. Mm-hmm."), true);
   assert.equal(isFillerOnlyTranscript("um, yep"), true);
@@ -218,6 +296,7 @@ test("config creates visible defaults and persists validated overrides", () => {
     assert.ok(initial.defaults);
     assert.deepEqual(initial.overrides, {});
     assert.equal(config.settings.agent.greet_on_join, true);
+    assert.equal(config.settings.agent.follow_up_window_ms, 30_000);
 
     config.setOverride("ai.model", "gpt-5.6-sol");
     config.setOverride("tts.qwen.voice", "arthas");
@@ -316,7 +395,14 @@ test("Pi agent executes a tool and continues to the final answer", async () => {
       fauxAssistantMessage("Готово."),
     ]);
     const config = new AppConfig(directory, { discordToken: "test" });
-    const runtime = new AgentRuntime(models, faux.getModel(), [currentDateTimeTool], history, skills, config);
+    const runtime = new AgentRuntime(
+      models,
+      faux.getModel(),
+      [currentDateTimeTool, keepSilenceTool],
+      history,
+      skills,
+      config,
+    );
     const calls: string[] = [];
 
     assert.deepEqual(runtime.switchModel(faux.getModel().id), {
@@ -331,6 +417,10 @@ test("Pi agent executes a tool and continues to the final answer", async () => {
     assert.equal(toolEntry?.kind === "tool" ? toolEntry.tool : undefined, "get_current_datetime");
     faux.appendResponses([fauxAssistantMessage("Напоминаю проверить тест.")]);
     assert.equal(await runtime.completeScheduled("Напомни проверить тест"), "Напоминаю проверить тест.");
+    faux.appendResponses([fauxAssistantMessage([fauxToolCall("keep_silence", {})], { stopReason: "toolUse" })]);
+    assert.equal(await runtime.completeFollowUp("[10:04:00] Илья: Да ну его.", "Илья", "Да ну его."), undefined);
+    const silenceEntry = history.entries.at(-1);
+    assert.equal(silenceEntry?.kind === "tool" ? silenceEntry.tool : undefined, "keep_silence");
     faux.appendResponses([
       fauxAssistantMessage(
         [

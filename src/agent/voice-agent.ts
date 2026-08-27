@@ -25,6 +25,7 @@ export class VoiceAgent {
   private readonly lastAutoParticipationCheckAt = new Map<string, number>();
   private readonly lastAutoParticipationResponseAt = new Map<string, number>();
   private readonly lastGreetingAt = new Map<string, number>();
+  private readonly followUpWindows = new Map<string, { userId: string; expiresAt: number }>();
 
   constructor(
     private readonly runtime: AgentRuntime,
@@ -72,9 +73,11 @@ export class VoiceAgent {
       return;
     }
     if (!wakeWord) {
+      if (this.handleFollowUp(transcript)) return;
       this.scheduleAutoParticipation(transcript.guildId, version);
       return;
     }
+    this.followUpWindows.delete(transcript.guildId);
 
     const now = Date.now();
     const cooldown = this.config.settings.agent.wake_cooldown_ms;
@@ -96,6 +99,9 @@ export class VoiceAgent {
       context_messages: this.history.entries.length,
     });
     void this.respond(transcript.guildId, context, generation)
+      .then((answered) => {
+        if (answered && this.generations.get(transcript.guildId) === generation) this.openFollowUp(transcript);
+      })
       .catch((error: unknown) => log("error", "voice response failed", { error: errorMessage(error) }))
       .finally(() => {
         if (this.generations.get(transcript.guildId) === generation) this.responding.delete(transcript.guildId);
@@ -151,6 +157,7 @@ export class VoiceAgent {
     this.conversationVersions.set(guildId, (this.conversationVersions.get(guildId) ?? 0) + 1);
     this.responding.delete(guildId);
     this.proactive.delete(guildId);
+    this.followUpWindows.delete(guildId);
     this.lastWakeAt.delete(guildId);
     this.lastAutoParticipationCheckAt.delete(guildId);
     this.lastAutoParticipationResponseAt.delete(guildId);
@@ -174,11 +181,17 @@ export class VoiceAgent {
     return lines.join("\n");
   }
 
-  private async respond(guildId: string, context: string, generation: number, proactiveIntent?: string): Promise<void> {
+  private async respond(
+    guildId: string,
+    context: string,
+    generation: number,
+    proactiveIntent?: string,
+    followUp?: Transcript,
+  ): Promise<boolean> {
     const started = performance.now();
     const announced = new Set<string>();
     const onToolCall = (tool: string, args: string, suggestion: string | undefined): void => {
-      if (tool.startsWith("discord_soundboard_")) return;
+      if (tool.startsWith("discord_soundboard_") || tool === "keep_silence") return;
       if (announced.has(tool)) return;
       announced.add(tool);
       void (async () => {
@@ -196,16 +209,56 @@ export class VoiceAgent {
         }),
       );
     };
-    const answer = proactiveIntent
-      ? await this.runtime.completeProactive(context, proactiveIntent, onToolCall)
-      : await this.runtime.complete(context, onToolCall);
-    if (this.generations.get(guildId) !== generation) return;
+    const answer = followUp
+      ? await this.runtime.completeFollowUp(context, followUp.user, followUp.text, onToolCall)
+      : proactiveIntent
+        ? await this.runtime.completeProactive(context, proactiveIntent, onToolCall)
+        : await this.runtime.complete(context, onToolCall);
+    if (this.generations.get(guildId) !== generation) return false;
+    if (answer === undefined) {
+      log("info", "follow-up kept silent", { user: followUp?.user, user_id: followUp?.userId });
+      return false;
+    }
     log("info", "LLM response", {
       elapsed: `${((performance.now() - started) / 1_000).toFixed(2)}s`,
       text: answer,
     });
     this.history.appendMessage("assistant", "Олег", answer);
     await this.speak(guildId, this.tts.synthesize(answer));
+    return true;
+  }
+
+  private openFollowUp(transcript: Transcript): void {
+    const duration = this.config.settings.agent.follow_up_window_ms;
+    if (!duration) return;
+    this.followUpWindows.set(transcript.guildId, { userId: transcript.userId, expiresAt: Date.now() + duration });
+    log("info", "follow-up window opened", {
+      user: transcript.user,
+      user_id: transcript.userId,
+      duration_ms: duration,
+    });
+  }
+
+  private handleFollowUp(transcript: Transcript): boolean {
+    const window = this.followUpWindows.get(transcript.guildId);
+    if (!window || window.userId !== transcript.userId) return false;
+    this.followUpWindows.delete(transcript.guildId);
+    if (window.expiresAt < Date.now()) return false;
+
+    const generation = (this.generations.get(transcript.guildId) ?? 0) + 1;
+    this.generations.set(transcript.guildId, generation);
+    this.responding.add(transcript.guildId);
+    const context = this.contextFor(this.history.entries);
+    log("info", "follow-up candidate", { user: transcript.user, user_id: transcript.userId, text: transcript.text });
+    void this.respond(transcript.guildId, context, generation, undefined, transcript)
+      .then((answered) => {
+        if (answered && this.generations.get(transcript.guildId) === generation) this.openFollowUp(transcript);
+      })
+      .catch((error: unknown) => log("error", "follow-up response failed", { error: errorMessage(error) }))
+      .finally(() => {
+        if (this.generations.get(transcript.guildId) === generation) this.responding.delete(transcript.guildId);
+      });
+    return true;
   }
 
   private setAutoParticipationMode(transcript: Transcript, mode: AutoParticipationMode): void {
