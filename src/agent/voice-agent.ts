@@ -17,7 +17,6 @@ const GREETING_COOLDOWN_MS = 30 * 60 * 1_000;
 
 export class VoiceAgent {
   private readonly responding = new Set<string>();
-  private readonly proactive = new Set<string>();
   private readonly lastWakeAt = new Map<string, number>();
   private readonly generations = new Map<string, number>();
   private readonly conversationVersions = new Map<string, number>();
@@ -52,12 +51,6 @@ export class VoiceAgent {
     const version = (this.conversationVersions.get(transcript.guildId) ?? 0) + 1;
     this.conversationVersions.set(transcript.guildId, version);
     this.cancelAutoParticipationTimer(transcript.guildId);
-    if (this.proactive.delete(transcript.guildId)) {
-      this.generations.set(transcript.guildId, (this.generations.get(transcript.guildId) ?? 0) + 1);
-      this.responding.delete(transcript.guildId);
-      this.stopSpeaking(transcript.guildId);
-      log("info", "auto participation response interrupted", { user: transcript.user });
-    }
     if (hasStopCommand(transcript.text)) {
       this.generations.set(transcript.guildId, (this.generations.get(transcript.guildId) ?? 0) + 1);
       this.responding.delete(transcript.guildId);
@@ -134,7 +127,6 @@ export class VoiceAgent {
     const generation = (this.generations.get(guildId) ?? 0) + 1;
     this.generations.set(guildId, generation);
     this.responding.add(guildId);
-    this.proactive.add(guildId);
     const context = this.contextFor(this.history.entries);
     void this.respond(
       guildId,
@@ -144,10 +136,7 @@ export class VoiceAgent {
     )
       .catch((error: unknown) => log("error", "voice greeting failed", { user, error: errorMessage(error) }))
       .finally(() => {
-        if (this.generations.get(guildId) === generation) {
-          this.responding.delete(guildId);
-          this.proactive.delete(guildId);
-        }
+        if (this.generations.get(guildId) === generation) this.responding.delete(guildId);
       });
   }
 
@@ -156,7 +145,6 @@ export class VoiceAgent {
     this.generations.set(guildId, (this.generations.get(guildId) ?? 0) + 1);
     this.conversationVersions.set(guildId, (this.conversationVersions.get(guildId) ?? 0) + 1);
     this.responding.delete(guildId);
-    this.proactive.delete(guildId);
     this.followUpWindows.delete(guildId);
     this.lastWakeAt.delete(guildId);
     this.lastAutoParticipationCheckAt.delete(guildId);
@@ -367,17 +355,13 @@ export class VoiceAgent {
     const generation = (this.generations.get(guildId) ?? 0) + 1;
     this.generations.set(guildId, generation);
     this.responding.add(guildId);
-    this.proactive.add(guildId);
     this.lastAutoParticipationResponseAt.set(guildId, Date.now());
     try {
       await this.respond(guildId, context, generation, verdict.replyIntent);
     } catch (error) {
       log("error", "auto participation response failed", { error: errorMessage(error) });
     } finally {
-      if (this.generations.get(guildId) === generation) {
-        this.responding.delete(guildId);
-        this.proactive.delete(guildId);
-      }
+      if (this.generations.get(guildId) === generation) this.responding.delete(guildId);
     }
   }
 

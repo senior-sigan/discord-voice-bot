@@ -154,6 +154,7 @@ test("wake word tolerates common STT variants as separate words", () => {
 });
 
 test("stop command requires Oleg and an explicit stop word", () => {
+  assert.equal(hasStopCommand("Олег стоп"), true);
   assert.equal(hasStopCommand("Олег СТОЙ"), true);
   assert.equal(hasStopCommand("олег, остановись!"), true);
   assert.equal(hasStopCommand("Олег — хватит."), true);
@@ -246,7 +247,7 @@ test("the same user gets one silent-capable follow-up turn after Oleg answers", 
     agent.onTranscript({ ...base, userId: "2", user: "Игорь", text: "Я его перебиваю." });
     assert.equal(stopped, 0);
     assert.equal(aborted, 0);
-    agent.onTranscript({ ...base, text: "Олег, стой." });
+    agent.onTranscript({ ...base, text: "Олег, стоп." });
     finishFollowUp(undefined);
     await new Promise((resolve) => setImmediate(resolve));
 
@@ -254,6 +255,61 @@ test("the same user gets one silent-capable follow-up turn after Oleg answers", 
     assert.equal(stopped, 1);
     assert.equal(aborted, 1);
     assert.equal(history.entries.filter((entry) => entry.kind === "assistant").length, 1);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("ordinary speech does not interrupt a proactive response", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-no-barge-in-"));
+  try {
+    const history = new HistoryStore(join(directory, "history.jsonl"));
+    const config = new AppConfig(directory, { discordToken: "test" });
+    let responseStarted = (): void => undefined;
+    const started = new Promise<void>((resolve) => {
+      responseStarted = resolve;
+    });
+    let finishResponse = (_answer: string): void => undefined;
+    const response = new Promise<string>((resolve) => {
+      finishResponse = resolve;
+    });
+    let aborted = 0;
+    let stopped = 0;
+    const runtime = {
+      completeProactive: () => {
+        responseStarted();
+        return response;
+      },
+      abort: () => {
+        aborted += 1;
+      },
+    } as unknown as AgentRuntime;
+    const agent = new VoiceAgent(
+      runtime,
+      history,
+      { synthesize: () => ({ stream: Readable.from([]), done: Promise.resolve(0), cancel: () => undefined }) },
+      () => [{ samples: new Float32Array(), sampleRate: 24_000 }],
+      async () => undefined,
+      () => {
+        stopped += 1;
+      },
+      config,
+      () => true,
+    );
+
+    agent.onVoiceMemberJoined("guild", "1", "Игорь", "Общий");
+    await started;
+    agent.onTranscript({
+      guildId: "guild",
+      userId: "2",
+      user: "Илья",
+      text: "Продолжаю разговор.",
+      timestamp: new Date().toISOString(),
+    });
+    assert.equal(stopped, 0);
+    assert.equal(aborted, 0);
+    finishResponse("Привет!");
+    await new Promise((resolve) => setImmediate(resolve));
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

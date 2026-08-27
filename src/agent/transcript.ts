@@ -1,6 +1,9 @@
 const WAKE_WORD = String.raw`(?<![\p{L}\p{N}_])ол(?:[её]га?|ьга)(?![\p{L}\p{N}_])`;
 const WAKE_WORD_PATTERN = new RegExp(WAKE_WORD, "iu");
-const STOP_COMMAND_PATTERN = new RegExp(`${WAKE_WORD}[\\s,!.:;—-]*(?:стой|остановись|хватит)(?![\\p{L}\\p{N}_])`, "iu");
+const STOP_COMMAND_PATTERN = new RegExp(
+  `${WAKE_WORD}[\\s,!.:;—-]*(?:стоп|стой|остановись|хватит)(?![\\p{L}\\p{N}_])`,
+  "iu",
+);
 
 export function hasWakeWord(text: string): boolean {
   return WAKE_WORD_PATTERN.test(text);
