@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { type AssistantMessage, cleanupSessionResources, contentText, Type } from "@earendil-works/pi-ai";
 
 import type { HistoryEntry } from "../agent/history.js";
-import { HistoryStore } from "../agent/history.js";
+import { HistoryStore, isTranscriptHistoryEntry } from "../agent/history.js";
 import type { MemoryEntry, MemoryEvidence, MemoryKind, ReflectionMemoryInput } from "../agent/memory.js";
 import { MemoryStore, normalized } from "../agent/memory.js";
 import type { PersonProfile, ProfileClaim } from "../agent/profiles.js";
@@ -404,7 +404,7 @@ export function validateProfileProposal(
         const proposal = parseProfileClaim(candidate);
         const evidence: MemoryEvidence[] = proposal.evidence.map((reference) => {
           const source = byTimestamp.get(reference.source_timestamp);
-          if (!source?.speaker_id || !source.speaker || !source.text)
+          if (source?.kind !== "transcript" || !source.speaker_id)
             throw new Error(`unknown source ${reference.source_timestamp}`);
           if (!normalized(source.text).includes(normalized(reference.quote)))
             throw new Error("quote not found in source");
@@ -629,7 +629,8 @@ function proposalJson(memory: ReflectionMemoryInput): Record<string, unknown> {
 }
 
 function transcriptLine(entry: HistoryEntry): string {
-  return `[${entry.timestamp}] [${entry.speaker_id ?? "unknown"}] ${entry.speaker ?? "unknown"}: ${entry.text ?? ""}`;
+  if (entry.kind !== "transcript") throw new Error("sleep input contains a non-transcript entry");
+  return `[${entry.timestamp}] [${entry.speaker_id ?? "unknown"}] ${entry.speaker}: ${entry.text}`;
 }
 
 function participantCatalog(entries: HistoryEntry[]): string {
@@ -729,7 +730,7 @@ async function main(): Promise<void> {
   const statePath = `${config.memoryFile}.sleep-state.json`;
   const state = loadState(statePath);
   const days = requestedDays(history.entries, process.argv[2]);
-  const transcripts = history.entries.filter((entry) => entry.kind === "transcript");
+  const transcripts = history.entries.filter(isTranscriptHistoryEntry);
   if (transcripts.some((entry) => !entry.speaker_id))
     throw new Error("History contains transcripts without speaker_id");
   const ai = await createAiRuntime(config, false);

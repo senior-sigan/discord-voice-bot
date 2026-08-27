@@ -142,6 +142,10 @@ export class DiscordBot {
     this.captures.get(guildId)?.interruptSpeech();
   }
 
+  isVoiceQuiet(guildId: string): boolean {
+    return this.captures.get(guildId)?.isQuiet() ?? false;
+  }
+
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;

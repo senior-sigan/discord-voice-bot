@@ -2,7 +2,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 
 import type { HistoryEntry, HistoryStore } from "../agent/history.js";
-import { searchHistory } from "../agent/history.js";
+import { isTranscriptHistoryEntry, searchHistory } from "../agent/history.js";
 import type { MemoryEntry, MemoryStore } from "../agent/memory.js";
 import { normalized } from "../agent/memory.js";
 import { textResult } from "./types.js";
@@ -44,16 +44,15 @@ export function createRememberTool(memory: MemoryStore, history: HistoryStore): 
       const quote = normalized(evidence);
       const requestedSpeaker = args.speaker ? normalized(args.speaker) : undefined;
       if (args.speaker !== undefined && !requestedSpeaker) throw new Error("speaker must not be blank");
-      const source = history.entries.findLast(
-        (entry) =>
-          entry.kind === "transcript" &&
-          entry.text !== undefined &&
-          entry.speaker !== undefined &&
-          (!requestedSpeaker || normalized(entry.speaker) === requestedSpeaker) &&
-          normalized(entry.text).includes(quote),
-      );
-      if (!source?.speaker) throw new Error("source_quote was not found in a user transcript");
-      if (!/(?:запомни|запомнить|помни|учти\s+на\s+будущее)/iu.test(source.text ?? "")) {
+      const source = history.entries
+        .filter(isTranscriptHistoryEntry)
+        .findLast(
+          (entry) =>
+            (!requestedSpeaker || normalized(entry.speaker) === requestedSpeaker) &&
+            normalized(entry.text).includes(quote),
+        );
+      if (!source) throw new Error("source_quote was not found in a user transcript");
+      if (!/(?:запомни|запомнить|помни|учти\s+на\s+будущее)/iu.test(source.text)) {
         throw new Error("the user did not explicitly ask to remember this fact");
       }
       const before = memory.entries.length;

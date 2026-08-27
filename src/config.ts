@@ -1,5 +1,7 @@
 import { join } from "node:path";
 
+import { type AutoParticipationMode, configuredAutoParticipationMode } from "./agent/auto-participation.js";
+
 export interface AppConfig {
   discordToken: string;
   discordGuildId: string;
@@ -19,6 +21,7 @@ export interface AppConfig {
   memoryFile: string;
   profilesFile: string;
   tasksFile: string;
+  autoParticipationMode: AutoParticipationMode;
   timezone: string;
 }
 
@@ -53,6 +56,7 @@ export function loadConfig(): AppConfig {
     memoryFile: dataPath("memory.jsonl"),
     profilesFile: dataPath("profiles.json"),
     tasksFile: dataPath("tasks.json"),
+    autoParticipationMode: configuredAutoParticipationMode(process.env["AUTO_PARTICIPATION_MODE"]),
     timezone: process.env["TIMEZONE"] ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
   };
 }

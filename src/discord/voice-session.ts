@@ -126,6 +126,15 @@ export class DiscordVoiceSession {
     return next;
   }
 
+  isQuiet(): boolean {
+    return (
+      !this.stopped &&
+      this.active.size === 0 &&
+      this.pendingAudio.size === 0 &&
+      this.player.state.status === AudioPlayerStatus.Idle
+    );
+  }
+
   private async playNow(audio: VoiceAudio, generation: number): Promise<void> {
     if (this.stopped) return;
     if ("stream" in audio) {

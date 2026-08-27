@@ -5,6 +5,12 @@ import type { Api, Model, Models } from "@earendil-works/pi-ai";
 import { contentText } from "@earendil-works/pi-ai";
 
 import { errorMessage, log } from "../common.js";
+import {
+  AUTO_PARTICIPATION_PROMPT,
+  AUTO_PARTICIPATION_TOOL,
+  type AutoParticipationVerdict,
+  parseAutoParticipationVerdict,
+} from "./auto-participation.js";
 import type { HistoryStore } from "./history.js";
 import { SYSTEM_PROMPT, TOOL_ANNOUNCEMENT_PROMPT } from "./prompts.js";
 import type { SkillStore } from "./skills.js";
@@ -17,6 +23,10 @@ export class AgentRuntime {
   private completionQueue: Promise<void> = Promise.resolve();
   private onToolCall: ToolCallListener | undefined;
   private latestAssistantText = "";
+
+  get modelName(): string {
+    return `${this.model.provider}/${this.model.id}`;
+  }
 
   constructor(
     private readonly models: Models,
@@ -43,6 +53,36 @@ export class AgentRuntime {
     return this.enqueue(() =>
       this.completePrompt(`Недавний разговор:\n${context}\n\nОтветь на обращение к Олегу.`, onToolCall),
     );
+  }
+
+  completeProactive(context: string, intent: string, onToolCall?: ToolCallListener): Promise<string> {
+    return this.enqueue(() =>
+      this.completePrompt(
+        `Недавний разговор:\n${context}\n\nТы сам решил уместно включиться. Намерение: ${intent}\nОтветь естественно и по делу, максимум двумя короткими предложениями. Не упоминай автоматический режим или это решение.`,
+        onToolCall,
+      ),
+    );
+  }
+
+  async decideAutoParticipation(context: string): Promise<AutoParticipationVerdict> {
+    const response = await this.models.completeSimple(
+      this.model,
+      {
+        systemPrompt: AUTO_PARTICIPATION_PROMPT,
+        messages: [{ role: "user", content: `Недавний разговор:\n${context}`, timestamp: Date.now() }],
+        tools: [AUTO_PARTICIPATION_TOOL],
+      },
+      { reasoning: "low", maxTokens: 512, timeoutMs: 30_000, sessionId: randomUUID() },
+    );
+    if (response.errorMessage) throw new Error(response.errorMessage);
+    if (response.stopReason === "error" || response.stopReason === "aborted") {
+      throw new Error("Auto participation decision failed");
+    }
+    const call = response.content.find(
+      (content) => content.type === "toolCall" && content.name === AUTO_PARTICIPATION_TOOL.name,
+    );
+    if (call?.type !== "toolCall") throw new Error("LLM did not return an auto participation decision");
+    return parseAutoParticipationVerdict(call.arguments, this.modelName);
   }
 
   completeScheduled(instruction: string): Promise<string> {

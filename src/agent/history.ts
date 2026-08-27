@@ -2,26 +2,55 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { errorMessage, formatMessageTime, isRecord, log } from "../common.js";
+import { type AutoParticipationDecisionRecord, isAutoParticipationDecisionRecord } from "./auto-participation.js";
 
-export type HistoryKind = "transcript" | "assistant" | "tool";
+export type HistoryKind = "transcript" | "assistant" | "tool" | "auto_participation";
 
-export interface HistoryEntry {
+interface HistoryEntryBase {
   timestamp: string;
   date: string;
   time: string;
-  kind: HistoryKind;
-  speaker?: string;
+}
+
+interface MessageHistoryEntryBase extends HistoryEntryBase {
+  speaker: string;
   speaker_id?: string;
-  text?: string;
-  tool?: string;
-  arguments?: unknown;
+  text: string;
+}
+
+export interface TranscriptHistoryEntry extends MessageHistoryEntryBase {
+  kind: "transcript";
+}
+
+export interface AssistantHistoryEntry extends MessageHistoryEntryBase {
+  kind: "assistant";
+}
+
+export interface ToolHistoryEntry extends HistoryEntryBase {
+  kind: "tool";
+  tool: string;
+  arguments: unknown;
+}
+
+export interface AutoParticipationHistoryEntry extends HistoryEntryBase, AutoParticipationDecisionRecord {
+  kind: "auto_participation";
+}
+
+export type HistoryEntry =
+  | TranscriptHistoryEntry
+  | AssistantHistoryEntry
+  | ToolHistoryEntry
+  | AutoParticipationHistoryEntry;
+
+export function isTranscriptHistoryEntry(entry: HistoryEntry): entry is TranscriptHistoryEntry {
+  return entry.kind === "transcript";
 }
 
 export interface HistorySearch {
   query?: string;
   date?: string;
   speaker?: string;
-  kind?: HistoryKind;
+  kind?: Exclude<HistoryKind, "auto_participation">;
   tool?: string;
   limit?: number;
 }
@@ -38,14 +67,18 @@ function isHistoryEntry(value: unknown): value is HistoryEntry {
     typeof value["timestamp"] !== "string" ||
     typeof value["date"] !== "string" ||
     typeof value["time"] !== "string" ||
-    (value["kind"] !== "transcript" && value["kind"] !== "assistant" && value["kind"] !== "tool")
+    (value["kind"] !== "transcript" &&
+      value["kind"] !== "assistant" &&
+      value["kind"] !== "tool" &&
+      value["kind"] !== "auto_participation")
   )
     return false;
+  if (value["kind"] === "auto_participation") return isAutoParticipationDecisionRecord(value);
+  if (value["kind"] === "tool") return typeof value["tool"] === "string";
   return (
     (value["speaker_id"] === undefined || typeof value["speaker_id"] === "string") &&
-    (value["kind"] === "tool"
-      ? typeof value["tool"] === "string"
-      : typeof value["speaker"] === "string" && typeof value["text"] === "string")
+    typeof value["speaker"] === "string" &&
+    typeof value["text"] === "string"
   );
 }
 
@@ -108,9 +141,9 @@ function wordSimilarity(left: string, right: string): number {
 }
 
 function historyText(entry: HistoryEntry): string {
-  return entry.kind === "tool"
-    ? `${entry.tool ?? ""} ${JSON.stringify(entry.arguments ?? {})}`
-    : `${entry.speaker ?? ""} ${entry.text ?? ""}`;
+  if (entry.kind === "tool") return `${entry.tool} ${JSON.stringify(entry.arguments)}`;
+  if (entry.kind === "auto_participation") return "";
+  return `${entry.speaker} ${entry.text}`;
 }
 
 function localDateOffset(now: Date, days: number): string {
@@ -146,10 +179,11 @@ export function searchHistory(
 
   return entries
     .flatMap((entry) => {
+      if (entry.kind === "auto_participation") return [];
       if (requestedDate && entry.date !== requestedDate) return [];
       if (requestedKind && entry.kind !== requestedKind) return [];
-      if (speaker && !entry.speaker?.toLocaleLowerCase("ru-RU").includes(speaker)) return [];
-      if (tool && !entry.tool?.toLocaleLowerCase("en-US").includes(tool)) return [];
+      if (speaker && (entry.kind === "tool" || !entry.speaker.toLocaleLowerCase("ru-RU").includes(speaker))) return [];
+      if (tool && (entry.kind !== "tool" || !entry.tool.toLocaleLowerCase("en-US").includes(tool))) return [];
       if (!queryWords.length) return [{ entry, relevance: 1 }];
       const words = normalizedWords(historyText(entry));
       if (!words.length) return [];
@@ -192,15 +226,15 @@ export class HistoryStore {
     at = new Date(),
     speakerId?: string,
   ): void {
-    this.append({
+    const entry = {
       timestamp: at.toISOString(),
       date: formatMessageDate(at),
       time: formatMessageTime(at),
-      kind,
       speaker,
       ...(speakerId ? { speaker_id: speakerId } : {}),
       text,
-    });
+    };
+    this.append(kind === "transcript" ? { ...entry, kind: "transcript" } : { ...entry, kind: "assistant" });
   }
 
   appendTool(tool: string, args: unknown, at = new Date()): void {
@@ -211,6 +245,16 @@ export class HistoryStore {
       kind: "tool",
       tool,
       arguments: args,
+    });
+  }
+
+  appendAutoParticipation(decision: AutoParticipationDecisionRecord, at = new Date()): void {
+    this.append({
+      timestamp: at.toISOString(),
+      date: formatMessageDate(at),
+      time: formatMessageTime(at),
+      kind: "auto_participation",
+      ...decision,
     });
   }
 

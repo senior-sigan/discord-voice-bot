@@ -44,6 +44,8 @@ async function run(): Promise<void> {
     loadFillers(config.fillerDir),
     (guildId, audio) => discord.speak(guildId, audio),
     (guildId) => discord.interrupt(guildId),
+    config.autoParticipationMode,
+    (guildId) => discord.isVoiceQuiet(guildId),
   );
   discord.setAgent(voiceAgent);
 

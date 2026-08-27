@@ -13,6 +13,11 @@ import {
   validateToolCall,
 } from "@earendil-works/pi-ai";
 
+import {
+  autoParticipationCommand,
+  configuredAutoParticipationMode,
+  parseAutoParticipationVerdict,
+} from "./agent/auto-participation.js";
 import { type HistoryEntry, HistoryStore, searchHistory } from "./agent/history.js";
 import { MemoryStore } from "./agent/memory.js";
 import { ProfileStore } from "./agent/profiles.js";
@@ -154,6 +159,32 @@ test("stop command requires Oleg and an explicit stop word", () => {
   assert.equal(hasStopCommand("Олег, продолжай"), false);
 });
 
+test("automatic participation commands and decisions are strict", () => {
+  assert.equal(autoParticipationCommand("Олег, включи автоматическое участие"), "on");
+  assert.equal(autoParticipationCommand("Олег, выключи автоматическое участие"), "off");
+  assert.equal(autoParticipationCommand("Олег, включи теневой режим автоматического участия"), "shadow");
+  assert.equal(autoParticipationCommand("Олег, подключайся к разговору"), undefined);
+  assert.equal(configuredAutoParticipationMode(undefined), "off");
+  assert.equal(configuredAutoParticipationMode(" SHADOW "), "shadow");
+  assert.throws(() => configuredAutoParticipationMode("always"), /must be off, shadow or on/u);
+  assert.deepEqual(
+    parseAutoParticipationVerdict(
+      { decision: "join", reason: "open_question", reply_intent: "Коротко ответить на вопрос" },
+      "test/model",
+    ),
+    {
+      decision: "join",
+      reason: "open_question",
+      replyIntent: "Коротко ответить на вопрос",
+      model: "test/model",
+    },
+  );
+  assert.throws(
+    () => parseAutoParticipationVerdict({ decision: "join", reason: "none", reply_intent: "Ответить" }, "test"),
+    /inconsistent/u,
+  );
+});
+
 test("filler-only transcripts are ignored without hiding real speech", () => {
   assert.equal(isFillerOnlyTranscript("Yeah. Uh. Okay. Mm-hmm."), true);
   assert.equal(isFillerOnlyTranscript("um, yep"), true);
@@ -251,9 +282,28 @@ test("Pi agent executes a tool and continues to the final answer", async () => {
 
     assert.equal(await runtime.complete("[10:00:00] Илья: Олег, который час?", (name) => calls.push(name)), "Готово.");
     assert.deepEqual(calls, ["get_current_datetime"]);
-    assert.equal(history.entries.at(-1)?.tool, "get_current_datetime");
+    const toolEntry = history.entries.at(-1);
+    assert.equal(toolEntry?.kind === "tool" ? toolEntry.tool : undefined, "get_current_datetime");
     faux.appendResponses([fauxAssistantMessage("Напоминаю проверить тест.")]);
     assert.equal(await runtime.completeScheduled("Напомни проверить тест"), "Напоминаю проверить тест.");
+    faux.appendResponses([
+      fauxAssistantMessage(
+        [
+          fauxToolCall("submit_auto_participation_decision", {
+            decision: "join",
+            reason: "missing_fact",
+            reply_intent: "Назвать проверяемый факт",
+          }),
+        ],
+        { stopReason: "toolUse" },
+      ),
+    ]);
+    assert.deepEqual(await runtime.decideAutoParticipation("[10:05:00] Илья: Никто не помнит?"), {
+      decision: "join",
+      reason: "missing_fact",
+      replyIntent: "Назвать проверяемый факт",
+      model: `${faux.getModel().provider}/${faux.getModel().id}`,
+    });
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -422,10 +472,28 @@ test("history survives restart and supports filtered fuzzy recall", async () => 
     store.appendMessage("transcript", "Илья", "Я рассказывал про новую подушку", new Date(2026, 7, 25, 10, 0, 0));
     store.appendMessage("assistant", "Олег", "Подушка отличная, бери", new Date(2026, 7, 25, 10, 0, 5));
     store.appendTool("web_search", { query: "подушки Омск" }, new Date(2026, 7, 25, 10, 0, 2));
+    store.appendAutoParticipation(
+      {
+        mode: "shadow",
+        guild_id: "guild-1",
+        context: "[10:00:00] Илья: Кто помнит ответ?",
+        decision: "join",
+        reason: "open_question",
+        reply_intent: "Ответить на вопрос",
+        model: "test/model",
+        acted: false,
+      },
+      new Date(2026, 7, 25, 10, 0, 6),
+    );
 
     const reloaded = new HistoryStore(path);
-    assert.equal(reloaded.entries.length, 3);
-    assert.equal(readFileSync(path, "utf8").trim().split("\n").length, 3);
+    assert.equal(reloaded.entries.length, 4);
+    assert.equal(readFileSync(path, "utf8").trim().split("\n").length, 4);
+    assert.equal(reloaded.entries.at(-1)?.kind, "auto_participation");
+    assert.equal(
+      searchHistory(reloaded.entries, { limit: 20 }).some((result) => result.entry.kind === "auto_participation"),
+      false,
+    );
     assert.equal(searchHistory(reloaded.entries, { query: "падушка", speaker: "Илья" })[0]?.entry.kind, "transcript");
 
     const recalled = await createRecallHistoryTool(reloaded).execute("test-recall", {
