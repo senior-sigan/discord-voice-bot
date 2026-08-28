@@ -18,6 +18,7 @@
     "check": "tsc --noEmit && biome check . && npm test"
   },
   "dependencies": {
+    "@discord/embedded-app-sdk": "2.5.0",
     "@discordjs/opus": "0.10.0",
     "@discordjs/voice": "0.19.2",
     "@earendil-works/pi-agent-core": "0.84.3",

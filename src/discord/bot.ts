@@ -61,6 +61,12 @@ export class DiscordBot {
     this.agent = agent;
   }
 
+  applicationId(): string {
+    const id = this.client.application?.id ?? this.client.user?.id;
+    if (!id) throw new Error("Discord client is not ready");
+    return id;
+  }
+
   async start(autoJoinChannel?: string): Promise<void> {
     if (!this.agent) throw new Error("Discord agent is not configured");
     const ready = new Promise<Client<true>>((resolve) => this.client.once(Events.ClientReady, resolve));

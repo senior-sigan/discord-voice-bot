@@ -16,6 +16,7 @@ import { hasStopCommand, hasWakeWord } from "./transcript.js";
 const GREETING_COOLDOWN_MS = 30 * 60 * 1_000;
 
 export class VoiceAgent {
+  private gameTranscriptHandler: ((transcript: Transcript) => boolean) | undefined;
   private readonly responding = new Set<string>();
   private readonly lastWakeAt = new Map<string, number>();
   private readonly generations = new Map<string, number>();
@@ -40,6 +41,10 @@ export class VoiceAgent {
     log("info", "voice greetings configured", { enabled: config.settings.agent.greet_on_join });
   }
 
+  setGameTranscriptHandler(handler: (transcript: Transcript) => boolean): void {
+    this.gameTranscriptHandler = handler;
+  }
+
   onTranscript(transcript: Transcript): void {
     this.history.appendMessage(
       "transcript",
@@ -58,6 +63,10 @@ export class VoiceAgent {
       this.runtime.abort();
       this.stopSpeaking(transcript.guildId);
       log("info", "speech interrupted", { user: transcript.user });
+      return;
+    }
+    if (this.gameTranscriptHandler?.(transcript)) {
+      this.followUpWindows.delete(transcript.guildId);
       return;
     }
     const wakeWord = hasWakeWord(transcript.text, wakeWords);

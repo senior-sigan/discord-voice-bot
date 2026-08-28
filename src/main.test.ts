@@ -28,6 +28,7 @@ import { formatMessageTime } from "./common.js";
 import { AppConfig, dataPath } from "./config.js";
 import { enteredVoiceChannel } from "./discord/bot.js";
 import { startLocalControlServer } from "./local-control.js";
+import { PoleChudesGame, parsePoleChudesVoiceAction } from "./pole-chudes.js";
 import { TaskScheduler } from "./scheduler.js";
 import { isRetryableLlmError, parseExplanation, resizeImageForLlm } from "./scripts/explain-memes.js";
 import { imageFileName, isImageAttachment } from "./scripts/export-memes.js";
@@ -244,6 +245,13 @@ test("the same user gets one silent-capable follow-up turn after Oleg answers", 
     );
 
     const base = { guildId: "guild", userId: "1", user: "Илья", timestamp: new Date().toISOString() };
+    let gameCommands = 0;
+    agent.setGameTranscriptHandler((transcript) => {
+      if (!transcript.text.includes("букву")) return false;
+      gameCommands += 1;
+      return true;
+    });
+    agent.onTranscript({ ...base, text: "Олег, я называю букву А." });
     agent.onTranscript({ ...base, text: "Олег, ты можешь написать сообщение?" });
     await directAnswer;
     await new Promise((resolve) => setImmediate(resolve));
@@ -257,6 +265,7 @@ test("the same user gets one silent-capable follow-up turn after Oleg answers", 
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(spoken, 2);
+    assert.equal(gameCommands, 1);
     assert.equal(stopped, 1);
     assert.equal(aborted, 1);
     assert.equal(history.entries.filter((entry) => entry.kind === "assistant").length, 1);
@@ -420,6 +429,57 @@ test("local control server accepts valid speech requests", async () => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
   }
+});
+
+test("pole chudes spins, opens letters, scores, and finishes a word", () => {
+  const random = [0, 0, 0];
+  const game = new PoleChudesGame([{ category: "Тест", answer: "АББА" }], () => random.shift() ?? 0);
+  game.apply({ type: "join", playerId: "player-one", name: "Илья" });
+  game.apply({ type: "join", playerId: "player-two", name: "Олег" });
+  game.apply({ type: "start", playerId: "player-one" });
+  game.apply({ type: "spin", playerId: "player-one" });
+  const middle = game.apply({ type: "guess", playerId: "player-one", letter: "Б" }).state;
+  assert.equal(middle.puzzle, "_ББ_");
+  assert.equal(middle.players[0]?.score, 10);
+  game.apply({ type: "spin", playerId: "player-one" });
+  const finished = game.apply({ type: "guess", playerId: "player-one", letter: "А" }).state;
+  assert.equal(finished.phase, "won");
+  assert.equal(finished.answer, "АББА");
+  assert.equal(finished.players[0]?.score, 20);
+});
+
+test("pole chudes voice commands use the current deterministic game state", () => {
+  const game = new PoleChudesGame([{ category: "Тест", answer: "ЁЖИК" }], () => 0);
+  game.apply({ type: "join", playerId: "223334633469640705", name: "Илья" });
+  const lobby = game.snapshot();
+  assert.deepEqual(parsePoleChudesVoiceAction(lobby, "223334633469640705", "Олег, начинай игру"), {
+    type: "start",
+    playerId: "223334633469640705",
+  });
+  game.apply({ type: "start", playerId: "223334633469640705" });
+  assert.deepEqual(parsePoleChudesVoiceAction(game.snapshot(), "223334633469640705", "Крути барабан"), {
+    type: "spin",
+    playerId: "223334633469640705",
+  });
+  game.apply({ type: "spin", playerId: "223334633469640705" });
+  const guess = parsePoleChudesVoiceAction(game.snapshot(), "223334633469640705", "Олег, я называю букву Ё");
+  assert.deepEqual(guess, { type: "guess", playerId: "223334633469640705", letter: "ё" });
+  if (!guess) assert.fail("voice guess was not parsed");
+  assert.equal(game.apply(guess).state.puzzle, "Ё___");
+});
+
+test("pole chudes has three tours and only accepts single-word answers", () => {
+  assert.throws(() => new PoleChudesGame([{ category: "Тест", answer: "ДВА СЛОВА" }]));
+  const game = new PoleChudesGame([{ category: "Тест", answer: "КОТ" }], () => 0);
+  game.apply({ type: "join", playerId: "player-one", name: "Илья" });
+  game.apply({ type: "start", playerId: "player-one" });
+  assert.equal(game.apply({ type: "solve", playerId: "player-one", answer: "кот" }).state.tour, "ЧЕТВЕРТЬФИНАЛ");
+  game.apply({ type: "newRound", playerId: "player-one" });
+  assert.equal(game.apply({ type: "solve", playerId: "player-one", answer: "кот" }).state.tour, "ПОЛУФИНАЛ");
+  game.apply({ type: "newRound", playerId: "player-one" });
+  const final = game.apply({ type: "solve", playerId: "player-one", answer: "кот" }).state;
+  assert.equal(final.tour, "ФИНАЛ");
+  assert.ok(final.prize);
 });
 
 test("scheduled tasks persist after execution and recurring tasks can be deleted", async () => {

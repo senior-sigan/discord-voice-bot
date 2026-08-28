@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="discord-client-id" content="__DISCORD_CLIENT_ID__" />
+    <title>Поле чудес с Олегом</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="dos-shell">
+      <header class="title-screen">
+        <span>КООПЕРАТИВ «ОЛЕГ И ПАРТНЁРЫ» ПРЕДСТАВЛЯЕТ</span>
+        <h1>ПОЛЕ ЧУДЕС</h1>
+        <strong>ВЕРСИЯ ДЛЯ DISCORD · 2026</strong>
+      </header>
+
+      <section class="game-screen" aria-label="Игровое поле">
+        <div class="status-bar">
+          <span id="tour">ОЖИДАНИЕ</span>
+          <span>ТЕМА: <strong id="category">ОЖИДАЕМ ИГРОКОВ</strong></span>
+        </div>
+
+        <section id="puzzle" class="puzzle" aria-label="Загаданное слово"></section>
+        <p id="prize" class="prize" hidden></p>
+
+        <div class="studio">
+          <section class="wheel-panel" aria-label="Барабан">
+            <div class="pointer" aria-hidden="true"></div>
+            <div id="wheel" class="wheel" aria-hidden="true"></div>
+            <button id="spin" class="command primary" type="button" disabled>КРУТИТЕ БАРАБАН!</button>
+          </section>
+
+          <section class="right-panel">
+            <form id="join-form" class="join-form">
+              <label for="identity">КТО ВЫ В DISCORD?</label>
+              <select id="identity" name="identity" required></select>
+              <button type="submit">ЗА БАРАБАН</button>
+            </form>
+
+            <div id="game-controls" hidden>
+              <div class="players-heading">
+                <h2>УЧАСТНИКИ / ОЧКИ</h2>
+                <button id="new-round" class="small" type="button" hidden>СЛЕДУЮЩИЙ ТУР</button>
+              </div>
+              <ol id="players" class="players"></ol>
+              <fieldset id="letters" class="letters" aria-label="Русские буквы"></fieldset>
+              <form id="solve-form" class="solve-form">
+                <label for="answer">НАЗВАТЬ СЛОВО ЦЕЛИКОМ</label>
+                <div class="inline">
+                  <input id="answer" name="answer" maxlength="50" autocomplete="off" />
+                  <button type="submit">ОТВЕТ</button>
+                </div>
+              </form>
+              <button id="start" class="command wide" type="button" hidden>НАЧАТЬ ИГРУ</button>
+            </div>
+
+            <aside class="oleg-window" aria-label="Ведущий Олег">
+              <div class="oleg-face" aria-hidden="true"><span>■&nbsp;■</span><b>╰─╯</b></div>
+              <div><strong>ОЛЕГ</strong><small>ГОЛОСОВОЙ ВЕДУЩИЙ</small></div>
+            </aside>
+          </section>
+        </div>
+
+        <p id="message" class="oleg-message" aria-live="polite">ОЛЕГ ЗАГРУЖАЕТСЯ С ДИСКЕТЫ…</p>
+        <p class="voice-help">ГОЛОСОМ: «КРУТИ БАРАБАН» · «БУКВА А» · «ОТВЕТ — КАПИБАРА»</p>
+        <p id="connection" class="connection">ПОДКЛЮЧАЕМСЯ К СТУДИИ…</p>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
