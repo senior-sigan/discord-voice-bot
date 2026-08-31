@@ -26,6 +26,21 @@ This is a Node.js TypeScript Discord voice agent. Source lives in `src/`; compil
 - `npm run start:select`: start with interactive AI-model selection.
 - `npm run sleep -- all`: process all conversation history into memories and profiles.
 
+## Speaking in the Discord Voice Channel
+
+When asked to say something through the running agent, send a local HTTP request to its speech endpoint:
+
+```bash
+curl --silent --show-error --fail-with-body http://127.0.0.1:7070/speak \
+  -H 'content-type: application/json' \
+  --data '{"text":"Привет из Codex!"}'
+```
+
+- This speaks through TTS in the voice channel the bot is currently connected to; it does not post a text message.
+- The request body must contain only `text`, with 1–1000 non-whitespace characters.
+- HTTP 200 with `{"ok":true}` means playback completed successfully. HTTP 503 usually means the bot is not connected to a voice channel or TTS/playback failed.
+- The endpoint is local-only by default (`defaults.agent.local_control` in `.data/config.json`) and is available only while the service is running.
+
 ## References and documentation
 
 - `AGENTS_BEST_PRACTICES.md`: best practices for building voice agents. Always check it have strong architecture. Read real code of other projects in `references`.
