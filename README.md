@@ -61,6 +61,16 @@ rm models/parakeet.tar.bz2 models/piper.tar.bz2
 
 Источники: [Parakeet TDT 0.6B v3 int8](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2), [Silero VAD](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx), [Piper ru_RU-ruslan-medium](https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ru_RU-ruslan-medium.tar.bz2). Пути после распаковки уже совпадают со значениями по умолчанию в конфиге.
 
+В качестве ещё одного локального TTS можно выбрать `supertonic`. Модель поддерживает русский язык и 10 голосов (`F1`–`F5` женские, `M1`–`M5` мужские):
+
+```bash
+curl -L https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-supertonic-3-tts-int8-2026-05-11.tar.bz2 -o models/supertonic.tar.bz2
+tar -xjf models/supertonic.tar.bz2 -C models
+rm models/supertonic.tar.bz2
+```
+
+После скачивания установите `defaults.tts.backend` в `supertonic`. Скорость, голос и качество настраиваются полями `defaults.tts.supertonic.speed`, `voice` и `num_steps`.
+
 ### Запустить LLM в LM Studio
 
 Установите [LM Studio](https://lmstudio.ai/download) и его CLI:
@@ -170,7 +180,7 @@ curl -sS http://127.0.0.1:7070/speak \
 |---|---|
 | `npm start` | Собрать и запустить бота |
 | `npm run start:select` | Интерактивно выбрать AI provider и модель |
-| `npm run generate-fillers` | Создать филлеры для текущего TTS и всех голосов Qwen |
+| `npm run generate-fillers` | Создать филлеры для текущего TTS и всех настроенных голосов Qwen/Supertonic |
 | `npm run sleep -- 2026-08-27` | Обработать конкретный день |
 | `npm run sleep -- all` | Обработать всю доступную историю и профили |
 | `npm run export-memes` | Скачать изображения из Discord в локальный каталог |

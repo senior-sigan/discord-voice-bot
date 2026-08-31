@@ -53,6 +53,7 @@ import { isSafePublicUrl } from "./tools/web.js";
 import type { Tts, VoiceAudio } from "./tts/index.js";
 import { fillerDirectory } from "./tts/index.js";
 import { QwenTts } from "./tts/qwentts.js";
+import { supertonicSpeakerId } from "./tts/sherpa.js";
 
 test("meme explanation parser normalizes valid structured output", () => {
   assert.deepEqual(
@@ -350,7 +351,11 @@ test("config creates visible defaults and persists validated overrides", () => {
     const initial = JSON.parse(readFileSync(config.file, "utf8")) as {
       defaults: {
         agent: { filler_dir: string };
-        tts: { backend: "piper" | "qwen"; qwen: { base_url: string } };
+        tts: {
+          backend: "piper" | "qwen" | "supertonic";
+          qwen: { base_url: string };
+          supertonic: { model_dir: string; voice: string; voices: string[] };
+        };
       };
       overrides: unknown;
     };
@@ -366,6 +371,7 @@ test("config creates visible defaults and persists validated overrides", () => {
       cooldown_ms: 30_000,
       context_ms: 300_000,
     });
+    assert.equal(config.settings.tts.supertonic.voice, "F1");
 
     config.setOverride("ai.model", "gpt-5.6-sol");
     config.setOverride("tts.qwen.voice", "arthas");
@@ -385,6 +391,14 @@ test("config creates visible defaults and persists validated overrides", () => {
     const qwenConfig = new AppConfig(directory, { discordToken: "test" });
     assert.equal(fillerDirectory(qwenConfig, "arthas"), join(directory, "fillers", "qwen", "tts-1", "arthas"));
 
+    qwenDocument.defaults.tts.backend = "supertonic";
+    writeFileSync(config.file, JSON.stringify(qwenDocument));
+    const supertonicConfig = new AppConfig(directory, { discordToken: "test" });
+    assert.equal(
+      fillerDirectory(supertonicConfig, "M5"),
+      join(directory, "fillers", "supertonic", encodeURIComponent(initial.defaults.tts.supertonic.model_dir), "M5"),
+    );
+
     const invalid = structuredClone(qwenDocument);
     invalid.defaults.tts.qwen.base_url = "https://user:password@tts.example";
     writeFileSync(config.file, JSON.stringify(invalid));
@@ -392,6 +406,12 @@ test("config creates visible defaults and persists validated overrides", () => {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("Supertonic voice names map to bundled speaker IDs", () => {
+  assert.equal(supertonicSpeakerId("F1"), 0);
+  assert.equal(supertonicSpeakerId("M5"), 9);
+  assert.throws(() => supertonicSpeakerId("unknown"), /Unknown Supertonic voice/u);
 });
 
 test("local control server accepts valid speech requests", async () => {

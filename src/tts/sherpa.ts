@@ -1,19 +1,27 @@
 import { existsSync } from "node:fs";
 import { PassThrough } from "node:stream";
+
 import type { OfflineTts as OfflineTtsType } from "sherpa-onnx-node";
 import sherpa from "sherpa-onnx-node";
 
 import { floatMonoToStereoPcm } from "../audio.js";
 import { errorMessage, log } from "../common.js";
 import { spokenText } from "./text.js";
-import type { StreamingAudio, Tts } from "./types.js";
+import { type StreamingAudio, SUPERTONIC_VOICES, type Tts } from "./types.js";
 
 const { LinearResampler, OfflineTts } = sherpa;
 
-export class PiperTts implements Tts {
-  private constructor(private readonly tts: OfflineTtsType) {}
+type GenerationRequest =
+  | { sid: number; speed: number }
+  | { generationConfig: InstanceType<typeof sherpa.GenerationConfig> };
 
-  static async create(modelDir: string, threads: number): Promise<PiperTts> {
+export class SherpaTts implements Tts {
+  private constructor(
+    private readonly tts: OfflineTtsType,
+    private readonly generation: GenerationRequest = { sid: 0, speed: 1 },
+  ) {}
+
+  static async createPiper(modelDir: string, threads: number): Promise<SherpaTts> {
     const model = `${modelDir}/ru_RU-ruslan-medium.onnx`;
     const tokens = `${modelDir}/tokens.txt`;
     const dataDir = `${modelDir}/espeak-ng-data`;
@@ -27,7 +35,43 @@ export class PiperTts implements Tts {
       provider: "cpu",
     });
     log("info", "TTS initialized", { provider: "cpu", voice: "ru_RU-ruslan-medium" });
-    return new PiperTts(tts);
+    return new SherpaTts(tts);
+  }
+
+  static async createSupertonic(
+    modelDir: string,
+    threads: number,
+    voice: string,
+    speed: number,
+    numSteps: number,
+  ): Promise<SherpaTts> {
+    const speakerId = supertonicSpeakerId(voice);
+    const paths = {
+      durationPredictor: `${modelDir}/duration_predictor.int8.onnx`,
+      textEncoder: `${modelDir}/text_encoder.int8.onnx`,
+      vectorEstimator: `${modelDir}/vector_estimator.int8.onnx`,
+      vocoder: `${modelDir}/vocoder.int8.onnx`,
+      ttsJson: `${modelDir}/tts.json`,
+      unicodeIndexer: `${modelDir}/unicode_indexer.bin`,
+      voiceStyle: `${modelDir}/voice.bin`,
+    };
+    for (const path of Object.values(paths)) {
+      if (!existsSync(path)) throw new Error(`TTS model file not found: ${path}`);
+    }
+    log("info", "loading Supertonic TTS", { model_dir: modelDir });
+    const tts = await OfflineTts.createAsync({
+      model: { supertonic: paths, numThreads: threads, provider: "cpu" },
+      maxNumSentences: 1,
+    });
+    log("info", "TTS initialized", { provider: "cpu", voice, language: "ru" });
+    return new SherpaTts(tts, {
+      generationConfig: new sherpa.GenerationConfig({
+        sid: speakerId,
+        speed,
+        numSteps,
+        extra: { lang: "ru" },
+      }),
+    });
   }
 
   synthesize(text: string): StreamingAudio {
@@ -41,8 +85,7 @@ export class PiperTts implements Tts {
     const done = this.tts
       .generateAsync({
         text: input,
-        sid: 0,
-        speed: 1,
+        ...this.generation,
         onProgress: ({ samples }) => {
           if (cancelled) return false;
           sampleCount += samples.length;
@@ -77,4 +120,10 @@ export class PiperTts implements Tts {
       },
     };
   }
+}
+
+export function supertonicSpeakerId(voice: string): number {
+  const speakerId = SUPERTONIC_VOICES.indexOf(voice as (typeof SUPERTONIC_VOICES)[number]);
+  if (speakerId < 0) throw new Error(`Unknown Supertonic voice: ${voice}`);
+  return speakerId;
 }

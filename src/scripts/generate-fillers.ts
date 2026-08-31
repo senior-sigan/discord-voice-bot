@@ -20,8 +20,10 @@ const FILLERS = [
 
 async function run(): Promise<void> {
   const config = loadConfig();
-  if (config.settings.tts.backend === "qwen") {
-    for (const voice of config.settings.tts.qwen.voices) {
+  const { tts } = config.settings;
+  if (tts.backend === "qwen" || tts.backend === "supertonic") {
+    const voices = tts.backend === "qwen" ? tts.qwen.voices : tts.supertonic.voices;
+    for (const voice of voices) {
       await generate(await createTts(config, voice), fillerDirectory(config, voice));
     }
     return;

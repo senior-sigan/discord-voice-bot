@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 
 import { isRecord, log } from "./common.js";
+import { SUPERTONIC_VOICES } from "./tts/types.js";
 
 const autoParticipationModeSchema = z.enum(["off", "shadow", "on"]);
 const nonBlankString = z.string().trim().min(1);
@@ -15,6 +16,7 @@ const wakeWordsSchema = z
     message: "Wake words must be unique",
   });
 const qwenVoiceSchema = nonBlankString.regex(/^[a-z0-9_-]+$/iu);
+const supertonicVoiceSchema = z.enum(SUPERTONIC_VOICES);
 const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
 const endpointUrl = z.url().refine((value) => {
@@ -40,11 +42,36 @@ const settingsSchema = z.strictObject({
     threads: positiveInteger,
   }),
   tts: z.strictObject({
-    backend: z.enum(["piper", "qwen"]),
+    backend: z.enum(["piper", "qwen", "supertonic"]),
     piper: z.strictObject({
       model_dir: nonBlankString,
       threads: positiveInteger,
     }),
+    supertonic: z
+      .strictObject({
+        model_dir: nonBlankString,
+        threads: positiveInteger,
+        voice: supertonicVoiceSchema,
+        voices: z.array(supertonicVoiceSchema).min(1),
+        speed: z.number().positive(),
+        num_steps: positiveInteger,
+      })
+      .refine(({ voice, voices }) => voices.includes(voice), {
+        path: ["voice"],
+        message: "Selected Supertonic voice must be listed in voices",
+      })
+      .refine(({ voices }) => new Set(voices).size === voices.length, {
+        path: ["voices"],
+        message: "Supertonic voices must be unique",
+      })
+      .default({
+        model_dir: "models/sherpa-onnx-supertonic-3-tts-int8-2026-05-11",
+        threads: 2,
+        voice: "F1",
+        voices: [...SUPERTONIC_VOICES],
+        speed: 1,
+        num_steps: 8,
+      }),
     qwen: z
       .strictObject({
         base_url: endpointUrl,
@@ -128,6 +155,14 @@ const INITIAL_DEFAULTS: RuntimeSettings = {
       model_dir: "models/vits-piper-ru_RU-ruslan-medium",
       threads: 2,
     },
+    supertonic: {
+      model_dir: "models/sherpa-onnx-supertonic-3-tts-int8-2026-05-11",
+      threads: 2,
+      voice: "F1",
+      voices: [...SUPERTONIC_VOICES],
+      speed: 1,
+      num_steps: 8,
+    },
     qwen: {
       base_url: "http://127.0.0.1:8000",
       sample_rate: 24_000,
@@ -191,7 +226,13 @@ export class AppConfig {
     log("info", "config loaded", {
       file: this.file,
       model: this.effectiveSettings.ai.model,
-      tts_voice: this.effectiveSettings.tts.qwen.voice,
+      tts_backend: this.effectiveSettings.tts.backend,
+      tts_voice:
+        this.effectiveSettings.tts.backend === "qwen"
+          ? this.effectiveSettings.tts.qwen.voice
+          : this.effectiveSettings.tts.backend === "supertonic"
+            ? this.effectiveSettings.tts.supertonic.voice
+            : "ru_RU-ruslan-medium",
       auto_participation: this.effectiveSettings.agent.auto_participation.mode,
       greet_on_join: this.effectiveSettings.agent.greet_on_join,
       follow_up_window_ms: this.effectiveSettings.agent.follow_up_window_ms,

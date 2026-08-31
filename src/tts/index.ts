@@ -6,42 +6,62 @@ import sherpa from "sherpa-onnx-node";
 
 import { log } from "../common.js";
 import type { AppConfig } from "../config.js";
-import { PiperTts } from "./piper.js";
 import { QwenTts } from "./qwentts.js";
+import { SherpaTts } from "./sherpa.js";
 import type { Tts } from "./types.js";
 
 export type { StreamingAudio, Tts, VoiceAudio } from "./types.js";
 
-export async function createTts(config: AppConfig, qwenVoice?: string): Promise<Tts> {
+export async function createTts(config: AppConfig, voice?: string): Promise<Tts> {
   const { backend } = config.settings.tts;
   if (backend === "piper") {
     const { model_dir: modelDir, threads } = config.settings.tts.piper;
-    return PiperTts.create(modelDir, threads);
+    return SherpaTts.createPiper(modelDir, threads);
+  }
+  if (backend === "supertonic") {
+    const {
+      model_dir: modelDir,
+      threads,
+      voice: configuredVoice,
+      speed,
+      num_steps: numSteps,
+    } = config.settings.tts.supertonic;
+    return SherpaTts.createSupertonic(modelDir, threads, voice ?? configuredVoice, speed, numSteps);
   }
   if (backend === "qwen") {
     return QwenTts.create(() => {
       const settings = config.settings.tts.qwen;
-      return qwenVoice ? { ...settings, voice: qwenVoice } : settings;
+      return voice ? { ...settings, voice } : settings;
     }, config.qwenTtsAuthorization);
   }
   throw new Error(`Unsupported TTS backend: ${backend}`);
 }
 
-export function fillerDirectory(config: AppConfig, qwenVoice?: string): string {
+export function fillerDirectory(config: AppConfig, voice?: string): string {
   const { tts } = config.settings;
   if (tts.backend === "qwen") {
     return join(
       config.settings.agent.filler_dir,
       "qwen",
       encodeURIComponent(tts.qwen.model),
-      encodeURIComponent(qwenVoice ?? tts.qwen.voice),
+      encodeURIComponent(voice ?? tts.qwen.voice),
+    );
+  }
+  if (tts.backend === "supertonic") {
+    return join(
+      config.settings.agent.filler_dir,
+      "supertonic",
+      encodeURIComponent(tts.supertonic.model_dir),
+      encodeURIComponent(voice ?? tts.supertonic.voice),
     );
   }
   return join(config.settings.agent.filler_dir, "piper", encodeURIComponent(tts.piper.model_dir));
 }
 
 export function loadFillers(config: AppConfig): () => [GeneratedAudio, ...GeneratedAudio[]] {
-  const voices = config.settings.tts.backend === "qwen" ? config.settings.tts.qwen.voices : [undefined];
+  const { tts } = config.settings;
+  const voices =
+    tts.backend === "qwen" ? tts.qwen.voices : tts.backend === "supertonic" ? tts.supertonic.voices : [undefined];
   const fillers = new Map(
     voices.map((voice) => [fillerDirectory(config, voice), readFillers(fillerDirectory(config, voice))]),
   );
