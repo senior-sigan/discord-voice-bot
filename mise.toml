@@ -18,6 +18,11 @@ description = "Build and start the bot, automatically joining the master voice c
 depends = ["install"]
 run = "npm start -- --autojoin"
 
+[tasks.sleep]
+description = "Process all conversation history into memories and profiles"
+depends = ["install"]
+run = "npm run sleep -- all"
+
 [tasks.default]
 description = "Start the bot with voice-channel auto-join"
 depends = ["start"]
