@@ -15,6 +15,28 @@ import { hasStopCommand, hasWakeWord } from "./transcript.js";
 
 const GREETING_COOLDOWN_MS = 30 * 60 * 1_000;
 
+export function formatVoiceContextTime(date: Date, timezone: string): string {
+  try {
+    const values = Object.fromEntries(
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone: timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      })
+        .formatToParts(date)
+        .map(({ type, value }) => [type, value]),
+    );
+    return `${values["year"]}-${values["month"]}-${values["day"]} ${values["hour"]}:${values["minute"]}:${values["second"]}`;
+  } catch {
+    return date.toISOString();
+  }
+}
+
 export class VoiceAgent {
   private readonly responding = new Set<string>();
   private readonly lastWakeAt = new Map<string, number>();
@@ -159,20 +181,23 @@ export class VoiceAgent {
 
   private contextFor(history: HistoryEntry[], since = Number.NEGATIVE_INFINITY): string {
     const limit = this.config.settings.agent.context_chars;
+    const timezone = this.config.settings.agent.timezone;
+    const now = `Текущий момент: ${formatVoiceContextTime(new Date(), timezone)} (${timezone}).`;
     const lines: string[] = [];
-    let length = 0;
+    let length = now.length;
     for (const entry of history.toReversed()) {
       if (Date.parse(entry.timestamp) < since) break;
       if (entry.kind === "auto_participation") continue;
+      const timestamp = formatVoiceContextTime(new Date(entry.timestamp), timezone);
       const line =
         entry.kind === "tool"
-          ? `[${entry.time}] Олег вызвал ${entry.tool} с аргументами ${JSON.stringify(entry.arguments ?? {})}`
-          : `[${entry.time}] ${entry.speaker}: ${entry.text}`;
+          ? `[${timestamp}] Олег вызвал ${entry.tool} с аргументами ${JSON.stringify(entry.arguments ?? {})}`
+          : `[${timestamp}] ${entry.speaker}: ${entry.text}`;
       if (lines.length && length + line.length > limit) break;
       lines.unshift(line);
       length += line.length;
     }
-    return lines.join("\n");
+    return [now, ...lines].join("\n");
   }
 
   private async respond(

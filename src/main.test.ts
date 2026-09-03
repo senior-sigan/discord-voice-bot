@@ -22,7 +22,7 @@ import { ProfileStore } from "./agent/profiles.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { SkillStore } from "./agent/skills.js";
 import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/transcript.js";
-import { VoiceAgent } from "./agent/voice-agent.js";
+import { formatVoiceContextTime, VoiceAgent } from "./agent/voice-agent.js";
 import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio.js";
 import { formatMessageTime } from "./common.js";
 import { AppConfig, dataPath } from "./config.js";
@@ -190,6 +190,10 @@ test("automatic participation commands and decisions are strict", () => {
     () => parseAutoParticipationVerdict({ decision: "join", reason: "none", reply_intent: "Ответить" }, "test"),
     /inconsistent/u,
   );
+});
+
+test("voice context timestamps use the configured timezone", () => {
+  assert.equal(formatVoiceContextTime(new Date("2026-09-01T04:30:00.000Z"), "Asia/Omsk"), "2026-09-01 10:30:00");
 });
 
 test("the same user gets one silent-capable follow-up turn after Oleg answers", async () => {
