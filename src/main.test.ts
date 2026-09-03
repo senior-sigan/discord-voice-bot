@@ -683,13 +683,13 @@ test("web tools reject local URLs and validate arguments", async () => {
   );
 });
 
-test("Discord tools list master members and send workspace images to общак", async () => {
+test("Discord tools list members, read text channels, and send workspace images to общак", async () => {
   const directory = mkdtempSync(join(process.cwd(), ".discord-tools-"));
   try {
     const image = join(directory, "result.png");
     writeFileSync(image, "test");
     const calls: unknown[][] = [];
-    const [members, send, sounds, playSound] = createDiscordTools({
+    const [members, send, readMessages, sounds, playSound] = createDiscordTools({
       async voiceMembers(channel) {
         calls.push(["members", channel]);
         return [{ id: "1", name: "Илья", bot: false }];
@@ -697,6 +697,18 @@ test("Discord tools list master members and send workspace images to общак"
       async sendMessage(channel, content, imagePath) {
         calls.push(["send", channel, content, imagePath]);
         return { id: "2", url: "https://discord.test/message" };
+      },
+      async readMessages(channel, limit, beforeMessageId) {
+        calls.push(["read", channel, limit, beforeMessageId]);
+        return [
+          {
+            id: "4",
+            author: "Илья",
+            content: "Привет",
+            timestamp: "2026-09-03T12:00:00.000Z",
+            url: "https://discord.test/4",
+          },
+        ];
       },
       async soundboardSounds() {
         calls.push(["sounds"]);
@@ -707,17 +719,40 @@ test("Discord tools list master members and send workspace images to общак"
         return { id: soundId, name: "Ба-дум-тс" };
       },
     });
-    assert.ok(members && send && sounds && playSound);
+    assert.ok(members && send && readMessages && sounds && playSound);
     assert.equal((await members.execute("members", {})).details?.count, 1);
     assert.equal(
       (await send.execute("send", { content: " https://example.com/image ", image_path: image })).details?.channel,
       "общак",
+    );
+    assert.deepEqual((await readMessages.execute("read", { channel: " общак ", limit: 3 })).details, {
+      status: "ok",
+      channel: "общак",
+      limit: 3,
+      before_message_id: undefined,
+      count: 1,
+      messages: [
+        {
+          id: "4",
+          author: "Илья",
+          content: "Привет",
+          timestamp: "2026-09-03T12:00:00.000Z",
+          url: "https://discord.test/4",
+        },
+      ],
+    });
+    assert.equal(
+      (await readMessages.execute("read-history", { channel: "общак", limit: 2, before_message_id: "4" })).details
+        ?.before_message_id,
+      "4",
     );
     assert.equal((await sounds.execute("sounds", {})).details?.count, 1);
     assert.equal((await playSound.execute("play", { sound_id: "3" })).details?.name, "Ба-дум-тс");
     assert.deepEqual(calls, [
       ["members", "master"],
       ["send", "общак", "https://example.com/image", safeImagePath(image)],
+      ["read", "общак", 3, undefined],
+      ["read", "общак", 2, "4"],
       ["sounds"],
       ["play", "master", "3"],
     ]);
@@ -726,6 +761,35 @@ test("Discord tools list master members and send workspace images to общак"
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("Discord text reader reports unavailable access without inventing messages", async () => {
+  const tools = createDiscordTools({
+    async voiceMembers() {
+      return [];
+    },
+    async sendMessage() {
+      return { id: "1", url: "https://discord.test/1" };
+    },
+    async readMessages() {
+      throw new Error("Missing Access");
+    },
+    async soundboardSounds() {
+      return [];
+    },
+    async playSoundboard() {
+      return { id: "1", name: "x" };
+    },
+  });
+  const readMessages = tools.find((tool) => tool.name === "discord_read_messages");
+  assert.ok(readMessages);
+  assert.deepEqual((await readMessages.execute("read", { channel: "общак" })).details, {
+    status: "unavailable",
+    channel: "общак",
+    limit: 20,
+    before_message_id: undefined,
+    error: "Missing Access",
+  });
 });
 
 test("history survives restart and supports filtered fuzzy recall", async () => {

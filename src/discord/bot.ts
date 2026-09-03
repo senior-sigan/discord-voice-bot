@@ -46,7 +46,12 @@ const voiceCommand = new SlashCommandBuilder()
 export class DiscordBot {
   private readonly captures = new Map<string, DiscordVoiceSession>();
   private readonly client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildVoiceStates,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+    ],
   });
   private agent: DiscordAgent | undefined;
   private stopped = false;
@@ -136,6 +141,31 @@ export class DiscordBot {
       allowedMentions: { parse: [] },
     });
     return { id: message.id, url: message.url };
+  }
+
+  async readMessages(
+    requestedChannel: string,
+    limit: number,
+    beforeMessageId?: string,
+  ): Promise<Array<{ id: string; author: string; content: string; timestamp: string; url: string }>> {
+    const guild = this.client.guilds.cache.get(this.guildId);
+    if (!guild) throw new Error(`Discord guild not found: ${this.guildId}`);
+    const channel = guild.channels.cache.find(
+      (candidate) =>
+        candidate.isTextBased() &&
+        (candidate.id === requestedChannel || candidate.name.toLowerCase() === requestedChannel.toLowerCase()),
+    );
+    if (!channel?.isTextBased()) throw new Error(`text channel not found: ${requestedChannel}`);
+    const messages = await channel.messages.fetch({ limit, ...(beforeMessageId ? { before: beforeMessageId } : {}) });
+    return [...messages.values()]
+      .toSorted((left, right) => left.createdTimestamp - right.createdTimestamp)
+      .map((message) => ({
+        id: message.id,
+        author: message.author.username,
+        content: message.content,
+        timestamp: message.createdAt.toISOString(),
+        url: message.url,
+      }));
   }
 
   async soundboardSounds(): Promise<Array<{ id: string; name: string; emoji?: string }>> {

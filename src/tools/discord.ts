@@ -11,6 +11,11 @@ const IMAGE_EXTENSIONS = new Set([".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".pn
 export interface DiscordToolsClient {
   voiceMembers(channel: string): Promise<Array<{ id: string; name: string; bot: boolean }>>;
   sendMessage(channel: string, content?: string, imagePath?: string): Promise<{ id: string; url: string }>;
+  readMessages(
+    channel: string,
+    limit: number,
+    beforeMessageId?: string,
+  ): Promise<Array<{ id: string; author: string; content: string; timestamp: string; url: string }>>;
   soundboardSounds(): Promise<Array<{ id: string; name: string; emoji?: string }>>;
   playSoundboard(channel: string, soundId: string): Promise<{ id: string; name: string }>;
 }
@@ -25,6 +30,16 @@ const sendParameters = Type.Object(
   {
     content: Type.Optional(Type.String({ maxLength: 2_000, description: "Текст сообщения или ссылки" })),
     image_path: Type.Optional(Type.String({ minLength: 1, description: "Путь к локальной картинке из workspace" })),
+  },
+  { additionalProperties: false },
+);
+const readMessagesParameters = Type.Object(
+  {
+    channel: Type.String({ minLength: 1, description: "Название или ID текстового канала Discord" }),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Число сообщений, от 1 до 100" })),
+    before_message_id: Type.Optional(
+      Type.String({ minLength: 1, description: "ID сообщения, перед которым читать более старую историю" }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -54,6 +69,38 @@ export function createDiscordTools(discord: DiscordToolsClient): AgentTool[] {
       return textResult({ channel: "общак", ...message });
     },
   };
+  const readMessages: AgentTool<typeof readMessagesParameters> = {
+    name: "discord_read_messages",
+    label: "Последние сообщения текстового канала Discord",
+    description:
+      "Читает сообщения указанного текстового канала. Без before_message_id возвращает последние сообщения; с before_message_id — более старую историю перед этим сообщением. Используй, когда спрашивают, что написано в общаке или другом текстовом канале; не заменяй этим голосовой контекст. При status unavailable доступа или данных нет — честно сообщи об этом и не выдумывай сообщения.",
+    parameters: readMessagesParameters,
+    async execute(_toolCallId, args) {
+      const channel = args.channel.trim();
+      if (!channel) throw new Error("channel must not be blank");
+      const limit = Math.max(1, Math.min(100, Math.trunc(args.limit ?? 20)));
+      const beforeMessageId = args.before_message_id?.trim() || undefined;
+      try {
+        const messages = await discord.readMessages(channel, limit, beforeMessageId);
+        return textResult({
+          status: "ok",
+          channel,
+          limit,
+          before_message_id: beforeMessageId,
+          count: messages.length,
+          messages,
+        });
+      } catch (error) {
+        return textResult({
+          status: "unavailable",
+          channel,
+          limit,
+          before_message_id: beforeMessageId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+  };
   const sounds: AgentTool<typeof soundsParameters> = {
     name: "discord_soundboard_sounds",
     label: "Звуки Discord soundboard",
@@ -77,7 +124,7 @@ export function createDiscordTools(discord: DiscordToolsClient): AgentTool[] {
       return textResult({ channel: "master", ...(await discord.playSoundboard("master", soundId)) });
     },
   };
-  return [members, send, sounds, playSound];
+  return [members, send, readMessages, sounds, playSound];
 }
 
 export function safeImagePath(value: string): string {
