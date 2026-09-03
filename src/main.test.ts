@@ -815,6 +815,54 @@ test("Discord text reader reports unavailable access without inventing messages"
   });
 });
 
+test("Discord image reader returns an attachment as model image content", async () => {
+  const previousFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (input) => {
+      assert.equal(String(input), "https://media.discordapp.net/attachments/1/screenshot.png");
+      return new Response(Buffer.from("png"), { headers: { "content-type": "image/png" } });
+    }) as typeof fetch;
+    const tools = createDiscordTools({
+      async voiceMembers() {
+        return [];
+      },
+      async sendMessage() {
+        return { id: "1", url: "https://discord.test/1" };
+      },
+      async readMessages() {
+        return [];
+      },
+      async readImage() {
+        return {
+          messageId: "42",
+          url: "https://media.discordapp.net/attachments/1/screenshot.png",
+          filename: "screenshot.png",
+          mimeType: "image/png",
+        };
+      },
+      async soundboardSounds() {
+        return [];
+      },
+      async playSoundboard() {
+        return { id: "1", name: "x" };
+      },
+    });
+    const tool = tools.find((candidate) => candidate.name === "discord_view_image");
+    assert.ok(tool);
+    const result = await tool.execute("image", { channel: "общак" });
+    assert.deepEqual(result.details, {
+      status: "ok",
+      channel: "общак",
+      message_id: "42",
+      filename: "screenshot.png",
+      size: 3,
+    });
+    assert.deepEqual(result.content.at(-1), { type: "image", data: "cG5n", mimeType: "image/png" });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test("history survives restart and supports filtered fuzzy recall", async () => {
   const directory = mkdtempSync(join(tmpdir(), "voice-agent-history-"));
   const path = join(directory, "history.jsonl");

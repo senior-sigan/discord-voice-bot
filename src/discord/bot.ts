@@ -44,6 +44,10 @@ const voiceCommand = new SlashCommandBuilder()
   )
   .addSubcommand((command) => command.setName("leave").setDescription("Leave the voice channel"));
 
+function isImageAttachment(attachment: { contentType: string | null; name: string }): boolean {
+  return attachment.contentType?.startsWith("image/") || /\.(?:avif|bmp|gif|jpe?g|png|webp)$/iu.test(attachment.name);
+}
+
 export class DiscordBot {
   private readonly captures = new Map<string, DiscordVoiceSession>();
   private readonly client = new Client({
@@ -149,7 +153,16 @@ export class DiscordBot {
     limit: number,
     beforeMessageId?: string,
     aroundDate?: Date,
-  ): Promise<Array<{ id: string; author: string; content: string; timestamp: string; url: string }>> {
+  ): Promise<
+    Array<{
+      id: string;
+      author: string;
+      content: string;
+      timestamp: string;
+      url: string;
+      images?: Array<{ filename: string; mime_type?: string }>;
+    }>
+  > {
     const guild = this.client.guilds.cache.get(this.guildId);
     if (!guild) throw new Error(`Discord guild not found: ${this.guildId}`);
     const channel = guild.channels.cache.find(
@@ -165,13 +178,49 @@ export class DiscordBot {
     });
     return [...messages.values()]
       .toSorted((left, right) => left.createdTimestamp - right.createdTimestamp)
-      .map((message) => ({
-        id: message.id,
-        author: message.author.username,
-        content: message.content,
-        timestamp: message.createdAt.toISOString(),
-        url: message.url,
-      }));
+      .map((message) => {
+        const images = [...message.attachments.values()].filter(isImageAttachment).map((attachment) => ({
+          filename: attachment.name,
+          ...(attachment.contentType ? { mime_type: attachment.contentType } : {}),
+        }));
+        return {
+          id: message.id,
+          author: message.author.username,
+          content: message.content,
+          timestamp: message.createdAt.toISOString(),
+          url: message.url,
+          ...(images.length ? { images } : {}),
+        };
+      });
+  }
+
+  async readImage(
+    requestedChannel: string,
+    messageId?: string,
+  ): Promise<{ messageId: string; url: string; filename: string; mimeType?: string }> {
+    const guild = this.client.guilds.cache.get(this.guildId);
+    if (!guild) throw new Error(`Discord guild not found: ${this.guildId}`);
+    const channel = guild.channels.cache.find(
+      (candidate) =>
+        candidate.isTextBased() &&
+        (candidate.id === requestedChannel || candidate.name.toLowerCase() === requestedChannel.toLowerCase()),
+    );
+    if (!channel?.isTextBased()) throw new Error(`text channel not found: ${requestedChannel}`);
+    const messages = messageId
+      ? [await channel.messages.fetch(messageId)]
+      : [...(await channel.messages.fetch({ limit: 20 })).values()];
+    for (const message of messages) {
+      const attachment = message.attachments.find(isImageAttachment);
+      if (attachment) {
+        return {
+          messageId: message.id,
+          url: attachment.url,
+          filename: attachment.name,
+          ...(attachment.contentType ? { mimeType: attachment.contentType } : {}),
+        };
+      }
+    }
+    throw new Error(messageId ? `no image in message: ${messageId}` : "no recent image in channel");
   }
 
   async soundboardSounds(): Promise<Array<{ id: string; name: string; emoji?: string }>> {

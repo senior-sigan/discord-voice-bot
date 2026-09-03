@@ -4,7 +4,7 @@ import { extname, sep } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 
-import { textResult } from "./types.js";
+import { textResult, toolSignal } from "./types.js";
 
 const IMAGE_EXTENSIONS = new Set([".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);
 
@@ -16,7 +16,20 @@ export interface DiscordToolsClient {
     limit: number,
     beforeMessageId?: string,
     aroundDate?: Date,
-  ): Promise<Array<{ id: string; author: string; content: string; timestamp: string; url: string }>>;
+  ): Promise<
+    Array<{
+      id: string;
+      author: string;
+      content: string;
+      timestamp: string;
+      url: string;
+      images?: Array<{ filename: string; mime_type?: string }>;
+    }>
+  >;
+  readImage?(
+    channel: string,
+    messageId?: string,
+  ): Promise<{ messageId: string; url: string; filename: string; mimeType?: string }>;
   soundboardSounds(): Promise<Array<{ id: string; name: string; emoji?: string }>>;
   playSoundboard(channel: string, soundId: string): Promise<{ id: string; name: string }>;
 }
@@ -50,6 +63,14 @@ const readMessagesParameters = Type.Object(
   },
   { additionalProperties: false },
 );
+const readImageParameters = Type.Object(
+  {
+    channel: Type.String({ minLength: 1, description: "Название или ID текстового канала Discord" }),
+    message_id: Type.Optional(Type.String({ minLength: 1, description: "ID сообщения с картинкой, если известен" })),
+  },
+  { additionalProperties: false },
+);
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 export function createDiscordTools(discord: DiscordToolsClient): AgentTool[] {
   const members: AgentTool<typeof membersParameters> = {
@@ -80,7 +101,7 @@ export function createDiscordTools(discord: DiscordToolsClient): AgentTool[] {
     name: "discord_read_messages",
     label: "Последние сообщения текстового канала Discord",
     description:
-      "Читает сообщения указанного текстового канала. Без параметров возвращает последние сообщения; с before_message_id — историю перед этим сообщением; с around_date — сообщения около указанного момента в прошлом. around_date передавай в ISO 8601 с часовым поясом. Используй, когда спрашивают, что написано в общаке или другом текстовом канале; не заменяй этим голосовой контекст. При status unavailable доступа или данных нет — честно сообщи об этом и не выдумывай сообщения.",
+      "Читает сообщения указанного текстового канала. Без параметров возвращает последние сообщения; с before_message_id — историю перед этим сообщением; с around_date — сообщения около указанного момента в прошлом. У сообщения с картинкой будет поле images: передай его id в discord_view_image, чтобы посмотреть нужную картинку. around_date передавай в ISO 8601 с часовым поясом. Используй, когда спрашивают, что написано в общаке или другом текстовом канале; не заменяй этим голосовой контекст. При status unavailable доступа или данных нет — честно сообщи об этом и не выдумывай сообщения.",
     parameters: readMessagesParameters,
     async execute(_toolCallId, args) {
       const channel = args.channel.trim();
@@ -136,7 +157,59 @@ export function createDiscordTools(discord: DiscordToolsClient): AgentTool[] {
       return textResult({ channel: "master", ...(await discord.playSoundboard("master", soundId)) });
     },
   };
-  return [members, send, readMessages, sounds, playSound];
+  const readImage: AgentTool<typeof readImageParameters> = {
+    name: "discord_view_image",
+    label: "Посмотреть картинку из Discord",
+    description:
+      "Передаёт модели последнее изображение из указанного текстового канала или изображение из message_id. Используй, когда пользователь просит посмотреть присланный скриншот, фото или мем.",
+    parameters: readImageParameters,
+    async execute(_toolCallId, args, signal) {
+      const channel = args.channel.trim();
+      if (!channel) throw new Error("channel must not be blank");
+      const messageId = args.message_id?.trim() || undefined;
+      try {
+        const image = await discord.readImage?.(channel, messageId);
+        if (!image) throw new Error("Discord client does not support image reading");
+        const target = new URL(image.url);
+        if (target.protocol !== "https:" || !/(?:^|\.)discordapp\.(?:com|net)$/u.test(target.hostname)) {
+          throw new Error("Discord attachment URL is invalid");
+        }
+        const response = await fetch(target, { signal: toolSignal(signal, 30_000) });
+        if (!response.ok || !response.body) throw new Error(`Image download failed: HTTP ${response.status}`);
+        const mimeType = response.headers.get("content-type")?.split(";", 1)[0] || image.mimeType;
+        if (!mimeType?.startsWith("image/")) throw new Error("Discord attachment is not an image");
+        const declaredSize = Number(response.headers.get("content-length"));
+        if (Number.isFinite(declaredSize) && declaredSize > MAX_IMAGE_BYTES)
+          throw new Error("Discord image exceeds 10 MiB");
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const chunk of response.body) {
+          const bytes = Buffer.from(chunk);
+          size += bytes.length;
+          if (size > MAX_IMAGE_BYTES) throw new Error("Discord image exceeds 10 MiB");
+          chunks.push(bytes);
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ channel, message_id: image.messageId, filename: image.filename, size }),
+            },
+            { type: "image", data: Buffer.concat(chunks).toString("base64"), mimeType },
+          ],
+          details: { status: "ok", channel, message_id: image.messageId, filename: image.filename, size },
+        };
+      } catch (error) {
+        return textResult({
+          status: "unavailable",
+          channel,
+          ...(messageId ? { message_id: messageId } : {}),
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+  };
+  return [members, send, readMessages, sounds, playSound, readImage];
 }
 
 function parseDiscordDate(value: string): Date {
