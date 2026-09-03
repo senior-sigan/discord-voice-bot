@@ -15,6 +15,7 @@ export interface DiscordToolsClient {
     channel: string,
     limit: number,
     beforeMessageId?: string,
+    aroundDate?: Date,
   ): Promise<Array<{ id: string; author: string; content: string; timestamp: string; url: string }>>;
   soundboardSounds(): Promise<Array<{ id: string; name: string; emoji?: string }>>;
   playSoundboard(channel: string, soundId: string): Promise<{ id: string; name: string }>;
@@ -39,6 +40,12 @@ const readMessagesParameters = Type.Object(
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Число сообщений, от 1 до 100" })),
     before_message_id: Type.Optional(
       Type.String({ minLength: 1, description: "ID сообщения, перед которым читать более старую историю" }),
+    ),
+    around_date: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description: "Дата и время в ISO 8601 с часовым поясом, вокруг которых искать сообщения",
+      }),
     ),
   },
   { additionalProperties: false },
@@ -73,20 +80,24 @@ export function createDiscordTools(discord: DiscordToolsClient): AgentTool[] {
     name: "discord_read_messages",
     label: "Последние сообщения текстового канала Discord",
     description:
-      "Читает сообщения указанного текстового канала. Без before_message_id возвращает последние сообщения; с before_message_id — более старую историю перед этим сообщением. Используй, когда спрашивают, что написано в общаке или другом текстовом канале; не заменяй этим голосовой контекст. При status unavailable доступа или данных нет — честно сообщи об этом и не выдумывай сообщения.",
+      "Читает сообщения указанного текстового канала. Без параметров возвращает последние сообщения; с before_message_id — историю перед этим сообщением; с around_date — сообщения около указанного момента в прошлом. around_date передавай в ISO 8601 с часовым поясом. Используй, когда спрашивают, что написано в общаке или другом текстовом канале; не заменяй этим голосовой контекст. При status unavailable доступа или данных нет — честно сообщи об этом и не выдумывай сообщения.",
     parameters: readMessagesParameters,
     async execute(_toolCallId, args) {
       const channel = args.channel.trim();
       if (!channel) throw new Error("channel must not be blank");
       const limit = Math.max(1, Math.min(100, Math.trunc(args.limit ?? 20)));
       const beforeMessageId = args.before_message_id?.trim() || undefined;
+      if (beforeMessageId && args.around_date)
+        throw new Error("before_message_id and around_date cannot be used together");
+      const aroundDate = args.around_date ? parseDiscordDate(args.around_date) : undefined;
       try {
-        const messages = await discord.readMessages(channel, limit, beforeMessageId);
+        const messages = await discord.readMessages(channel, limit, beforeMessageId, aroundDate);
         return textResult({
           status: "ok",
           channel,
           limit,
           before_message_id: beforeMessageId,
+          ...(aroundDate ? { around_date: aroundDate.toISOString() } : {}),
           count: messages.length,
           messages,
         });
@@ -96,6 +107,7 @@ export function createDiscordTools(discord: DiscordToolsClient): AgentTool[] {
           channel,
           limit,
           before_message_id: beforeMessageId,
+          ...(aroundDate ? { around_date: aroundDate.toISOString() } : {}),
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -125,6 +137,15 @@ export function createDiscordTools(discord: DiscordToolsClient): AgentTool[] {
     },
   };
   return [members, send, readMessages, sounds, playSound];
+}
+
+function parseDiscordDate(value: string): Date {
+  const text = value.trim();
+  const date = new Date(text);
+  if (!/T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(text) || Number.isNaN(date.getTime())) {
+    throw new Error("around_date must be an ISO 8601 date-time with a timezone");
+  }
+  return date;
 }
 
 export function safeImagePath(value: string): string {

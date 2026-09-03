@@ -9,6 +9,7 @@ import {
   REST,
   Routes,
   SlashCommandBuilder,
+  SnowflakeUtil,
 } from "discord.js";
 
 import { errorMessage, log } from "../common.js";
@@ -147,6 +148,7 @@ export class DiscordBot {
     requestedChannel: string,
     limit: number,
     beforeMessageId?: string,
+    aroundDate?: Date,
   ): Promise<Array<{ id: string; author: string; content: string; timestamp: string; url: string }>> {
     const guild = this.client.guilds.cache.get(this.guildId);
     if (!guild) throw new Error(`Discord guild not found: ${this.guildId}`);
@@ -156,7 +158,11 @@ export class DiscordBot {
         (candidate.id === requestedChannel || candidate.name.toLowerCase() === requestedChannel.toLowerCase()),
     );
     if (!channel?.isTextBased()) throw new Error(`text channel not found: ${requestedChannel}`);
-    const messages = await channel.messages.fetch({ limit, ...(beforeMessageId ? { before: beforeMessageId } : {}) });
+    const messages = await channel.messages.fetch({
+      limit,
+      ...(beforeMessageId ? { before: beforeMessageId } : {}),
+      ...(aroundDate ? { around: SnowflakeUtil.generate({ timestamp: aroundDate }).toString() } : {}),
+    });
     return [...messages.values()]
       .toSorted((left, right) => left.createdTimestamp - right.createdTimestamp)
       .map((message) => ({

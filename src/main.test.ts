@@ -698,8 +698,8 @@ test("Discord tools list members, read text channels, and send workspace images 
         calls.push(["send", channel, content, imagePath]);
         return { id: "2", url: "https://discord.test/message" };
       },
-      async readMessages(channel, limit, beforeMessageId) {
-        calls.push(["read", channel, limit, beforeMessageId]);
+      async readMessages(channel, limit, beforeMessageId, aroundDate) {
+        calls.push(["read", channel, limit, beforeMessageId, aroundDate?.toISOString()]);
         return [
           {
             id: "4",
@@ -730,6 +730,7 @@ test("Discord tools list members, read text channels, and send workspace images 
       channel: "общак",
       limit: 3,
       before_message_id: undefined,
+      around_date: undefined,
       count: 1,
       messages: [
         {
@@ -746,13 +747,31 @@ test("Discord tools list members, read text channels, and send workspace images 
         ?.before_message_id,
       "4",
     );
+    assert.equal(
+      (
+        await readMessages.execute("read-date", {
+          channel: "общак",
+          limit: 2,
+          around_date: "2026-09-01T10:30:00+06:00",
+        })
+      ).details?.around_date,
+      "2026-09-01T04:30:00.000Z",
+    );
+    await assert.rejects(
+      readMessages.execute("bad-date", {
+        channel: "общак",
+        around_date: "2026-09-01",
+      }),
+      /around_date must be an ISO 8601 date-time with a timezone/u,
+    );
     assert.equal((await sounds.execute("sounds", {})).details?.count, 1);
     assert.equal((await playSound.execute("play", { sound_id: "3" })).details?.name, "Ба-дум-тс");
     assert.deepEqual(calls, [
       ["members", "master"],
       ["send", "общак", "https://example.com/image", safeImagePath(image)],
-      ["read", "общак", 3, undefined],
-      ["read", "общак", 2, "4"],
+      ["read", "общак", 3, undefined, undefined],
+      ["read", "общак", 2, "4", undefined],
+      ["read", "общак", 2, undefined, "2026-09-01T04:30:00.000Z"],
       ["sounds"],
       ["play", "master", "3"],
     ]);
