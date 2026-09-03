@@ -31,6 +31,7 @@ export interface MemoryEvidence {
   speaker_id: string;
   speaker: string;
   quote: string;
+  quoteReworded?: boolean;
 }
 
 export interface ReflectionMemoryInput {
@@ -176,7 +177,8 @@ function isMemoryEvidence(value: unknown): value is MemoryEvidence {
     typeof value["source_timestamp"] === "string" &&
     typeof value["speaker_id"] === "string" &&
     typeof value["speaker"] === "string" &&
-    typeof value["quote"] === "string"
+    typeof value["quote"] === "string" &&
+    (value["quoteReworded"] === undefined || typeof value["quoteReworded"] === "boolean")
   );
 }
 

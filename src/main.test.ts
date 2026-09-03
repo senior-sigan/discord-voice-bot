@@ -858,6 +858,35 @@ test("sleep memories require exact user-authored evidence", () => {
   assert.equal(hourlyChunks(sources, 10_000).length, 2);
 });
 
+test("sleep keeps an STT-corrected quote and marks it as reworded", () => {
+  const source = {
+    timestamp: "2026-08-26T10:00:00.000Z",
+    date: "2026-08-26",
+    time: "16:00:00",
+    kind: "transcript" as const,
+    speaker: "Илья",
+    speaker_id: "1",
+    text: "Я в сентябре поеду на Бакал",
+  } satisfies HistoryEntry;
+  const result = validateProposals(
+    {
+      memories: [
+        {
+          kind: "person",
+          summary: "Илья планирует в сентябре поехать на Байкал.",
+          subject_ids: ["1"],
+          importance: 4,
+          evidence: [{ source_timestamp: source.timestamp, quote: "В сентябре поеду на Байкал" }],
+        },
+      ],
+    },
+    [source],
+    "2026-08-26",
+  );
+  assert.equal(result.rejected.length, 0);
+  assert.equal(result.accepted[0]?.evidence[0]?.quoteReworded, true);
+});
+
 test("person profiles are structured, updated in place and hide raw evidence from the agent", async () => {
   const directory = mkdtempSync(join(tmpdir(), "voice-agent-profiles-"));
   const sources = [
