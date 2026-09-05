@@ -231,20 +231,17 @@ export class VoiceAgent {
     followUp?: Transcript,
   ): Promise<boolean> {
     const started = performance.now();
-    const announced = new Set<string>();
+    let announced = false;
     let announcements: Promise<void> = Promise.resolve();
     let acceptingAnnouncements = true;
-    const onToolCall = (tool: string, args: string, suggestion: string | undefined): void => {
+    const onToolCall = (tool: string, _args: string, suggestion: string | undefined): void => {
       if (!acceptingAnnouncements || tool.startsWith("discord_soundboard_") || tool === "keep_silence") return;
-      if (announced.has(tool)) return;
-      announced.add(tool);
+      const text = suggestion?.trim();
+      if (announced || !text || text.length > 200) return;
+      announced = true;
       const version = this.conversationVersions.get(guildId);
       announcements = announcements
         .then(async () => {
-          const text =
-            suggestion && suggestion.length <= 200
-              ? suggestion
-              : await this.runtime.toolAnnouncement(context, tool, args);
           if (
             !acceptingAnnouncements ||
             this.generations.get(guildId) !== generation ||

@@ -13,7 +13,7 @@ import {
   parseAutoParticipationVerdict,
 } from "./auto-participation.js";
 import type { HistoryStore } from "./history.js";
-import { SYSTEM_PROMPT, TOOL_ANNOUNCEMENT_PROMPT } from "./prompts.js";
+import { SYSTEM_PROMPT } from "./prompts.js";
 import type { SkillStore } from "./skills.js";
 
 export type ToolCallListener = (name: string, args: string, announcement: string | undefined) => void;
@@ -177,26 +177,6 @@ export class AgentRuntime {
       () => undefined,
     );
     return next;
-  }
-
-  async toolAnnouncement(context: string, tool: string, args: string): Promise<string> {
-    const response = await this.models.completeSimple(
-      this.model,
-      {
-        systemPrompt: TOOL_ANNOUNCEMENT_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: `Последняя реплика: ${context.trim().split("\n").at(-1) ?? context}\nДействие: ${tool}\nАргументы: ${args}`,
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      { maxTokens: 64, timeoutMs: 5_000, sessionId: randomUUID() },
-    );
-    const text = contentText(response.content).trim();
-    if (!text) throw new Error(response.errorMessage || "LLM returned no tool announcement");
-    return text;
   }
 
   steer(user: string, text: string): boolean {

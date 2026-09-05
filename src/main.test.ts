@@ -1905,3 +1905,45 @@ test("voice move tool validates destinations, waits for Ready and follows the cu
     connection.destroy();
   }
 });
+
+test("tool progress is optional and speaks at most once per request", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-progress-"));
+  try {
+    for (const withProgress of [false, true]) {
+      const spoken: string[] = [];
+      const runtime = {
+        complete: async (_context: string, onTool: (name: string, args: string, text?: string) => void) => {
+          onTool("skill_view", "{}");
+          onTool("web_search", "{}", withProgress ? "Сравню варианты." : undefined);
+          onTool("web_fetch", "{}", withProgress ? "Теперь прочитаю страницу." : undefined);
+          await new Promise((resolve) => setImmediate(resolve));
+          return "Готово.";
+        },
+      } as unknown as AgentRuntime;
+      const agent = new VoiceAgent(
+        runtime,
+        new HistoryStore(join(directory, `${withProgress}.jsonl`)),
+        {
+          synthesize: (text) => {
+            spoken.push(text);
+            return { stream: Readable.from([]), done: Promise.resolve(0), cancel: () => undefined };
+          },
+        },
+        () => [{ samples: new Float32Array(), sampleRate: 24_000 }],
+        async () => undefined,
+        () => undefined,
+        new AppConfig(directory, { discordToken: "test" }),
+        () => true,
+      );
+      const internal = agent as unknown as {
+        generations: Map<string, number>;
+        respond(guild: string, context: string, generation: number): Promise<boolean>;
+      };
+      internal.generations.set("g", 0);
+      assert.equal(await internal.respond("g", "Найди и сравни варианты", 0), true);
+      assert.deepEqual(spoken, withProgress ? ["Сравню варианты.", "Готово."] : ["Готово."]);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
