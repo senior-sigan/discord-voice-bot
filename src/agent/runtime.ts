@@ -22,6 +22,7 @@ export class AgentRuntime {
   private readonly agent: Agent;
   private readonly toolStartedAt = new Map<string, number>();
   private completionQueue: Promise<void> = Promise.resolve();
+  private generation = 0;
   private onToolCall: ToolCallListener | undefined;
   private latestAssistantText = "";
   private keepSilenceRequested = false;
@@ -50,6 +51,10 @@ export class AgentRuntime {
       streamFn: models.streamSimple.bind(models),
       sessionId: randomUUID(),
       toolExecution: "parallel",
+      beforeToolCall: async () =>
+        this.agent.hasQueuedMessages()
+          ? { block: true, reason: "Поступило уточнение пользователя. Сначала учти его, затем заново выбери действия." }
+          : undefined,
     });
     this.agent.subscribe((event) => this.handleEvent(event));
   }
@@ -146,8 +151,10 @@ export class AgentRuntime {
     this.onToolCall = onToolCall;
     this.latestAssistantText = "";
     this.keepSilenceRequested = false;
+    const generation = this.generation;
     try {
       await this.agent.prompt(prompt);
+      if (generation !== this.generation) throw new DOMException("Request cancelled", "AbortError");
       if (allowSilence && this.keepSilenceRequested) return "";
       const final = this.agent.state.messages.findLast((message) => message.role === "assistant");
       if (final?.role !== "assistant") throw new Error("Pi agent returned no assistant message");
@@ -160,7 +167,11 @@ export class AgentRuntime {
   }
 
   private enqueue<T>(work: () => Promise<T>): Promise<T> {
-    const next = this.completionQueue.then(work, work);
+    const generation = this.generation;
+    const next = this.completionQueue.then(() => {
+      if (generation !== this.generation) throw new DOMException("Request cancelled", "AbortError");
+      return work();
+    });
     this.completionQueue = next.then(
       () => undefined,
       () => undefined,
@@ -181,14 +192,26 @@ export class AgentRuntime {
           },
         ],
       },
-      { maxTokens: 64, sessionId: randomUUID() },
+      { maxTokens: 64, timeoutMs: 5_000, sessionId: randomUUID() },
     );
     const text = contentText(response.content).trim();
     if (!text) throw new Error(response.errorMessage || "LLM returned no tool announcement");
     return text;
   }
 
+  steer(user: string, text: string): boolean {
+    if (!this.agent.signal || this.agent.signal.aborted) return false;
+    this.agent.steer({
+      role: "user",
+      content: `Новое обращение ${user}: ${text}\nЭто уточняет или заменяет предыдущий запрос. Учитывай уже выполненные действия, не повторяй их.`,
+      timestamp: Date.now(),
+    });
+    return true;
+  }
+
   abort(): void {
+    this.generation++;
+    this.agent.clearAllQueues();
     this.agent.abort();
   }
 
@@ -198,6 +221,10 @@ export class AgentRuntime {
   }
 
   private handleEvent(event: AgentEvent): void {
+    if (event.type === "message_end" && event.message.role === "user") {
+      this.keepSilenceRequested = false;
+      this.latestAssistantText = "";
+    }
     if (event.type === "message_end" && event.message.role === "assistant") {
       this.latestAssistantText = contentText(event.message.content).trim();
       return;
@@ -212,7 +239,8 @@ export class AgentRuntime {
       } catch (error) {
         log("error", "tool history append failed", { tool: event.toolName, error: errorMessage(error) });
       }
-      this.onToolCall?.(event.toolName, args, this.latestAssistantText || undefined);
+      if (!this.agent.hasQueuedMessages())
+        this.onToolCall?.(event.toolName, args, this.latestAssistantText || undefined);
       return;
     }
     if (event.type === "tool_execution_end") {

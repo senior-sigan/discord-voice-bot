@@ -7,6 +7,13 @@ export function hasWakeWord(text: string, wakeWords: readonly string[]): boolean
   return new RegExp(wakeWordPattern(wakeWords), "iu").test(text);
 }
 
+export function isWakeOnly(text: string, wakeWords: readonly string[]): boolean {
+  return (
+    hasWakeWord(text, wakeWords) &&
+    !/[\p{L}\p{N}]/u.test(text.replace(new RegExp(wakeWordPattern(wakeWords), "giu"), ""))
+  );
+}
+
 export function hasStopCommand(text: string, wakeWords: readonly string[]): boolean {
   const pattern = `${wakeWordPattern(wakeWords)}[\\s,!.:;—-]*(?:стоп|стой|остановись|хватит)(?![\\p{L}\\p{N}_])`;
   return new RegExp(pattern, "iu").test(text);

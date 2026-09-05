@@ -11,7 +11,7 @@ import {
 } from "./auto-participation.js";
 import type { HistoryEntry, HistoryStore } from "./history.js";
 import type { AgentRuntime } from "./runtime.js";
-import { hasStopCommand, hasWakeWord } from "./transcript.js";
+import { hasStopCommand, hasWakeWord, isWakeOnly } from "./transcript.js";
 
 const GREETING_COOLDOWN_MS = 30 * 60 * 1_000;
 
@@ -39,14 +39,14 @@ export function formatVoiceContextTime(date: Date, timezone: string): string {
 
 export class VoiceAgent {
   private readonly responding = new Set<string>();
-  private readonly lastWakeAt = new Map<string, number>();
+  private readonly lastWake = new Map<string, { at: number; userId: string; user: string; text: string }>();
   private readonly generations = new Map<string, number>();
   private readonly conversationVersions = new Map<string, number>();
   private readonly autoParticipationTimers = new Map<string, NodeJS.Timeout>();
   private readonly lastAutoParticipationCheckAt = new Map<string, number>();
   private readonly lastAutoParticipationResponseAt = new Map<string, number>();
   private readonly lastGreetingAt = new Map<string, number>();
-  private readonly followUpWindows = new Map<string, { userId: string; expiresAt: number }>();
+  private readonly followUpWindows = new Map<string, { userId: string; expiresAt: number; activation: boolean }>();
 
   constructor(
     private readonly runtime: AgentRuntime,
@@ -77,6 +77,8 @@ export class VoiceAgent {
     if (hasStopCommand(transcript.text, wakeWords)) {
       this.generations.set(transcript.guildId, (this.generations.get(transcript.guildId) ?? 0) + 1);
       this.responding.delete(transcript.guildId);
+      this.followUpWindows.delete(transcript.guildId);
+      this.lastWake.delete(transcript.guildId);
       this.runtime.abort();
       this.stopSpeaking(transcript.guildId);
       log("info", "speech interrupted", { user: transcript.user });
@@ -93,22 +95,41 @@ export class VoiceAgent {
       this.scheduleAutoParticipation(transcript.guildId, version);
       return;
     }
-    this.followUpWindows.delete(transcript.guildId);
-
+    const wakeOnly = isWakeOnly(transcript.text, wakeWords);
     const now = Date.now();
-    const cooldown = this.config.settings.agent.wake_cooldown_ms;
-    if (this.responding.has(transcript.guildId) || now - (this.lastWakeAt.get(transcript.guildId) ?? 0) < cooldown) {
+    const previous = this.lastWake.get(transcript.guildId);
+    if (
+      previous?.userId === transcript.userId &&
+      previous.text === transcript.text &&
+      now - previous.at < this.config.settings.agent.wake_cooldown_ms
+    )
       return;
+    this.followUpWindows.delete(transcript.guildId);
+    this.lastWake.set(transcript.guildId, {
+      at: now,
+      userId: transcript.userId,
+      user: transcript.user,
+      text: transcript.text,
+    });
+    if (this.responding.has(transcript.guildId)) {
+      this.stopSpeaking(transcript.guildId);
+      if (!wakeOnly && this.runtime.steer(transcript.user, transcript.text)) return;
+      // The LLM may already be done and playing audio, or still waiting in its queue.
+      this.runtime.abort();
     }
     const generation = (this.generations.get(transcript.guildId) ?? 0) + 1;
     this.generations.set(transcript.guildId, generation);
     this.responding.add(transcript.guildId);
-    this.lastWakeAt.set(transcript.guildId, now);
     const fillers = this.fillers();
     const filler = fillers.at(Math.floor(Math.random() * fillers.length)) ?? fillers[0];
     void this.speak(transcript.guildId, filler).catch((error: unknown) => {
       log("error", "filler playback failed", { error: errorMessage(error) });
     });
+    if (wakeOnly) {
+      this.responding.delete(transcript.guildId);
+      this.openFollowUp(transcript, true);
+      return;
+    }
     const context = this.contextFor(this.history.entries);
     log("info", "wake word detected", {
       user: transcript.user,
@@ -126,15 +147,14 @@ export class VoiceAgent {
 
   async runScheduledTask(guildId: string, instruction: string): Promise<void> {
     log("info", "scheduled task started", { instruction });
+    const generation = this.generations.get(guildId) ?? 0;
     const answer = await this.runtime.completeScheduled(instruction);
-    this.history.appendMessage("assistant", "Олег", answer);
-    await this.speak(guildId, this.tts.synthesize(answer));
+    await this.deliver(guildId, answer, generation);
     log("info", "scheduled task completed", { answer });
   }
 
   async speakDirectly(guildId: string, text: string): Promise<void> {
-    await this.speak(guildId, this.tts.synthesize(text));
-    this.history.appendMessage("assistant", "Олег", text);
+    await this.deliver(guildId, text);
   }
 
   onVoiceMemberJoined(guildId: string, userId: string, user: string, channel: string): void {
@@ -169,12 +189,14 @@ export class VoiceAgent {
   }
 
   clear(guildId: string): void {
+    this.runtime.abort();
+    this.stopSpeaking(guildId);
     this.cancelAutoParticipationTimer(guildId);
     this.generations.set(guildId, (this.generations.get(guildId) ?? 0) + 1);
     this.conversationVersions.set(guildId, (this.conversationVersions.get(guildId) ?? 0) + 1);
     this.responding.delete(guildId);
     this.followUpWindows.delete(guildId);
-    this.lastWakeAt.delete(guildId);
+    this.lastWake.delete(guildId);
     this.lastAutoParticipationCheckAt.delete(guildId);
     this.lastAutoParticipationResponseAt.delete(guildId);
   }
@@ -188,6 +210,7 @@ export class VoiceAgent {
     for (const entry of history.toReversed()) {
       if (Date.parse(entry.timestamp) < since) break;
       if (entry.kind === "auto_participation") continue;
+      if (entry.kind === "assistant" && entry.playback && entry.playback !== "played") continue;
       const timestamp = formatVoiceContextTime(new Date(entry.timestamp), timezone);
       const line =
         entry.kind === "tool"
@@ -209,30 +232,44 @@ export class VoiceAgent {
   ): Promise<boolean> {
     const started = performance.now();
     const announced = new Set<string>();
+    let announcements: Promise<void> = Promise.resolve();
+    let acceptingAnnouncements = true;
     const onToolCall = (tool: string, args: string, suggestion: string | undefined): void => {
-      if (tool.startsWith("discord_soundboard_") || tool === "keep_silence") return;
+      if (!acceptingAnnouncements || tool.startsWith("discord_soundboard_") || tool === "keep_silence") return;
       if (announced.has(tool)) return;
       announced.add(tool);
-      void (async () => {
-        const text =
-          suggestion && suggestion.length <= 200
-            ? suggestion
-            : await this.runtime.toolAnnouncement(context, tool, args);
-        if (this.generations.get(guildId) !== generation) return;
-        log("info", "tool announcement", { tool, text });
-        await this.speak(guildId, this.tts.synthesize(text));
-      })().catch((error: unknown) =>
-        log("error", "tool announcement failed", {
-          tool,
-          error: errorMessage(error),
-        }),
-      );
+      const version = this.conversationVersions.get(guildId);
+      announcements = announcements
+        .then(async () => {
+          const text =
+            suggestion && suggestion.length <= 200
+              ? suggestion
+              : await this.runtime.toolAnnouncement(context, tool, args);
+          if (
+            !acceptingAnnouncements ||
+            this.generations.get(guildId) !== generation ||
+            this.conversationVersions.get(guildId) !== version
+          )
+            return;
+          log("info", "tool announcement", { tool, text });
+          await this.deliver(guildId, text, generation);
+        })
+        .catch((error: unknown) =>
+          log("error", "tool announcement failed", {
+            tool,
+            error: errorMessage(error),
+          }),
+        );
     };
-    const answer = followUp
-      ? await this.runtime.completeFollowUp(context, followUp.user, followUp.text, onToolCall)
+    const answer = await (followUp
+      ? this.runtime.completeFollowUp(context, followUp.user, followUp.text, onToolCall)
       : proactiveIntent
-        ? await this.runtime.completeProactive(context, proactiveIntent, onToolCall)
-        : await this.runtime.complete(context, onToolCall);
+        ? this.runtime.completeProactive(context, proactiveIntent, onToolCall)
+        : this.runtime.complete(context, onToolCall)
+    ).finally(() => {
+      acceptingAnnouncements = false;
+    });
+    await announcements;
     if (this.generations.get(guildId) !== generation) return false;
     if (answer === undefined) {
       log("info", "follow-up kept silent", { user: followUp?.user, user_id: followUp?.userId });
@@ -242,18 +279,41 @@ export class VoiceAgent {
       elapsed: `${((performance.now() - started) / 1_000).toFixed(2)}s`,
       text: answer,
     });
-    this.history.appendMessage("assistant", "Олег", answer);
-    await this.speak(guildId, this.tts.synthesize(answer));
+    await this.deliver(guildId, answer, generation);
     return true;
   }
 
-  private openFollowUp(transcript: Transcript): void {
-    const duration = this.config.settings.agent.follow_up_window_ms;
+  private async deliver(guildId: string, text: string, generation = this.generations.get(guildId) ?? 0): Promise<void> {
+    const current = () => (this.generations.get(guildId) ?? 0) === generation;
+    const sentences = new Intl.Segmenter("ru", { granularity: "sentence" }).segment(text);
+    for (const { segment } of sentences) {
+      if (!current()) throw new DOMException("Speech superseded", "AbortError");
+      if (!segment.trim()) continue;
+      try {
+        await this.speak(guildId, this.tts.synthesize(segment.trim()));
+        if (!current()) throw new DOMException("Speech superseded", "AbortError");
+        this.history.appendSpeech(segment.trim(), "played");
+      } catch (error) {
+        // ponytail: only completed sentences are confirmed; add word alignment if partial phrases matter.
+        const interrupted = !current() || (error instanceof Error && error.name === "AbortError");
+        this.history.appendSpeech(segment.trim(), interrupted ? "interrupted" : "failed");
+        throw error;
+      }
+    }
+  }
+
+  private openFollowUp(transcript: Transcript, activation = false): void {
+    const duration = activation ? 30_000 : this.config.settings.agent.follow_up_window_ms;
     if (!duration) return;
-    this.followUpWindows.set(transcript.guildId, { userId: transcript.userId, expiresAt: Date.now() + duration });
+    const speaker = this.lastWake.get(transcript.guildId) ?? transcript;
+    this.followUpWindows.set(transcript.guildId, {
+      userId: speaker.userId,
+      expiresAt: Date.now() + duration,
+      activation,
+    });
     log("info", "follow-up window opened", {
-      user: transcript.user,
-      user_id: transcript.userId,
+      user: speaker.user,
+      user_id: speaker.userId,
       duration_ms: duration,
     });
   }
@@ -269,7 +329,7 @@ export class VoiceAgent {
     this.responding.add(transcript.guildId);
     const context = this.contextFor(this.history.entries);
     log("info", "follow-up candidate", { user: transcript.user, user_id: transcript.userId, text: transcript.text });
-    void this.respond(transcript.guildId, context, generation, undefined, transcript)
+    void this.respond(transcript.guildId, context, generation, undefined, window.activation ? undefined : transcript)
       .then((answered) => {
         if (answered && this.generations.get(transcript.guildId) === generation) this.openFollowUp(transcript);
       })
@@ -288,9 +348,8 @@ export class VoiceAgent {
         : mode === "shadow"
           ? "Теневой режим автоматического участия включён."
           : "Автоматическое участие выключено.";
-    this.history.appendMessage("assistant", "Олег", text);
     log("info", "auto participation mode changed", { mode, user: transcript.user, user_id: transcript.userId });
-    void (async () => this.speak(transcript.guildId, this.tts.synthesize(text)))().catch((error: unknown) =>
+    void this.deliver(transcript.guildId, text).catch((error: unknown) =>
       log("error", "auto participation acknowledgement failed", { error: errorMessage(error) }),
     );
   }
@@ -358,7 +417,7 @@ export class VoiceAgent {
       return;
     }
 
-    const discarded = this.discardedAutoParticipationReason(guildId, mode);
+    const discarded = this.discardedAutoParticipationReason(guildId, mode, version);
     const acted =
       mode === "on" && verdict.decision === "join" && verdict.replyIntent !== undefined && discarded === undefined;
     log("info", "auto participation decision", {
@@ -399,9 +458,12 @@ export class VoiceAgent {
   private discardedAutoParticipationReason(
     guildId: string,
     mode: AutoParticipationMode,
-  ): "mode_changed" | "busy" | undefined {
+    version: number,
+  ): "mode_changed" | "busy" | "conversation_changed" | "speech_started" | undefined {
     if (this.config.settings.agent.auto_participation.mode !== mode) return "mode_changed";
     if (this.responding.has(guildId)) return "busy";
+    if (this.conversationVersions.get(guildId) !== version) return "conversation_changed";
+    if (!this.isVoiceQuiet(guildId)) return "speech_started";
     return undefined;
   }
 }

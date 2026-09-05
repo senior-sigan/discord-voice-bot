@@ -132,6 +132,52 @@ test("stereo PCM is mixed to mono without changing duration", () => {
   assert.equal(mono.at(1), 0.5);
 });
 
+test("VAD drains speech before capture ends and discards cancelled input", () => {
+  const abort = new AbortController();
+  const segments: Float32Array[] = [];
+  const delivered: Float32Array[] = [];
+  let accepted = 0;
+  let resets = 0;
+  const vad = {
+    acceptWaveform: (samples: Float32Array) => {
+      assert.ok(samples.length <= 512);
+      accepted += samples.length;
+      if (accepted === 1024) segments.push(new Float32Array([1, 2, 3]));
+    },
+    isEmpty: () => !segments.length,
+    front: (external?: boolean) => {
+      assert.equal(external, false);
+      return { start: 0, samples: segments[0] ?? new Float32Array() };
+    },
+    pop: () => {
+      segments.shift();
+    },
+    reset: () => {
+      resets++;
+    },
+    flush: () => {
+      segments.push(new Float32Array([4]));
+    },
+  };
+  const input = new SpeechSegmenter(vad, (samples) => delivered.push(samples), abort.signal);
+  input.accept(new Float32Array(2048));
+  assert.deepEqual(
+    delivered.map((samples) => Array.from(samples)),
+    [[1, 2, 3]],
+  );
+  input.finish();
+  assert.deepEqual(
+    delivered.map((samples) => Array.from(samples)),
+    [[1, 2, 3], [4]],
+  );
+  abort.abort();
+  input.accept(new Float32Array(512));
+  input.finish();
+  assert.equal(accepted, 2048);
+  assert.equal(resets, 2);
+  assert.equal(delivered.length, 2);
+});
+
 test("wake word tolerates common STT variants as separate words", () => {
   const wakeWords = ["олег", "олега", "ольга", "борис"];
   assert.equal(hasWakeWord("Олег, что ты думаешь?", wakeWords), true);
@@ -1312,92 +1358,218 @@ test("relative history dates respect Cyrillic boundaries and the configured time
   );
 });
 
-test("VAD drains speech before capture ends and discards cancelled input", () => {
-  const abort = new AbortController();
-  const segments: Float32Array[] = [];
-  const delivered: Float32Array[] = [];
-  let accepted = 0;
-  let resets = 0;
-  const vad = {
-    acceptWaveform: (samples: Float32Array) => {
-      assert.ok(samples.length <= 512);
-      accepted += samples.length;
-      if (accepted === 1024) segments.push(new Float32Array([1, 2, 3]));
-    },
-    isEmpty: () => !segments.length,
-    front: (external?: boolean) => {
-      assert.equal(external, false);
-      return { start: 0, samples: segments[0] ?? new Float32Array() };
-    },
-    pop: () => {
-      segments.shift();
-    },
-    reset: () => {
-      resets++;
-    },
-    flush: () => {
-      segments.push(new Float32Array([4]));
-    },
-  };
-  const input = new SpeechSegmenter(vad, (samples) => delivered.push(samples), abort.signal);
-  input.accept(new Float32Array(2048));
-  assert.deepEqual(
-    delivered.map((samples) => Array.from(samples)),
-    [[1, 2, 3]],
-  );
-  input.finish();
-  assert.deepEqual(
-    delivered.map((samples) => Array.from(samples)),
-    [[1, 2, 3], [4]],
-  );
-  abort.abort();
-  input.accept(new Float32Array(512));
-  input.finish();
-  assert.equal(accepted, 2048);
-  assert.equal(resets, 2);
-  assert.equal(delivered.length, 2);
+test("voice history confirms completed sentences and excludes interrupted or failed speech", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-delivery-"));
+  try {
+    const history = new HistoryStore(join(directory, "history.jsonl"));
+    const config = new AppConfig(directory, { discordToken: "test" });
+    let finish = (): void => undefined;
+    let started = (): void => undefined;
+    const waiting = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let sentences = 0;
+    const agent = new VoiceAgent(
+      { abort: () => undefined } as unknown as AgentRuntime,
+      history,
+      { synthesize: () => ({ stream: Readable.from([]), done: Promise.resolve(0), cancel: () => undefined }) },
+      () => [{ samples: new Float32Array(), sampleRate: 24_000 }],
+      async () => {
+        sentences++;
+        if (sentences === 2) {
+          started();
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        }
+        if (sentences === 3) throw new Error("TTS failed");
+      },
+      () => undefined,
+      config,
+      () => true,
+    );
+    const delivery = agent.speakDirectly("g", "Первая фраза. Вторая фраза. Третья фраза.");
+    await waiting;
+    assert.equal(history.entries.length, 1);
+    agent.clear("g");
+    finish();
+    await assert.rejects(delivery, { name: "AbortError" });
+    await assert.rejects(agent.speakDirectly("g", "Ошибка синтеза."), /TTS failed/u);
+    assert.deepEqual(
+      history.entries.map((entry) => entry.kind === "assistant" && entry.playback),
+      ["played", "interrupted", "failed"],
+    );
+    const restored = new HistoryStore(history.path);
+    assert.deepEqual(
+      searchHistory(restored.entries, {}).map(({ entry }) => entry.kind === "assistant" && entry.text),
+      ["Первая фраза."],
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
-test("STT skips cancelled queued work and suppresses results cancelled during decoding", async () => {
-  let decodes = 0;
-  let finish = (_result: { text: string }): void => undefined;
-  const recognizer = {
-    createStream: () => ({ acceptWaveform: () => undefined }),
-    decodeAsync: () => {
-      decodes++;
-      return new Promise<{ text: string }>((resolve) => {
-        finish = resolve;
-      });
-    },
-  };
-  // Exercise the queue independently of model files or inference speed.
-  const transcriber = Reflect.construct(ParakeetTranscriber, [recognizer, {}]) as {
-    enqueue(
-      samples: Float32Array,
-      meta: Omit<Transcript, "text">,
-      callback: (transcript: Transcript) => void,
-      signal: AbortSignal,
-    ): void;
-    queue: Promise<void>;
-  };
-  const abort = new AbortController();
-  let callbacks = 0;
-  const meta = { guildId: "g", userId: "1", user: "Илья", timestamp: new Date().toISOString() };
-  for (let i = 0; i < 2; i++)
-    transcriber.enqueue(
-      new Float32Array(512),
-      meta,
-      () => {
-        callbacks++;
+test("new addressed requests bypass cooldown, steer generation and replace ongoing speech", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-corrections-"));
+  try {
+    const history = new HistoryStore(join(directory, "history.jsonl"));
+    const config = new AppConfig(directory, { discordToken: "test" });
+    let finish = (_text: string): void => undefined;
+    let requests = 0;
+    let generating = true;
+    let aborted = 0;
+    const corrections: string[] = [];
+    const runtime = {
+      complete: () => {
+        requests++;
+        return new Promise<string>((resolve) => {
+          finish = resolve;
+        });
       },
-      abort.signal,
+      steer: (_user: string, text: string) => {
+        if (!generating) return false;
+        corrections.push(text);
+        return true;
+      },
+      abort: () => {
+        aborted++;
+      },
+    } as unknown as AgentRuntime;
+    const agent = new VoiceAgent(
+      runtime,
+      history,
+      { synthesize: () => ({ stream: Readable.from([]), done: Promise.resolve(0), cancel: () => undefined }) },
+      () => [{ samples: new Float32Array(), sampleRate: 24_000 }],
+      async () => undefined,
+      () => undefined,
+      config,
+      () => true,
     );
-  await new Promise((resolve) => setImmediate(resolve));
-  abort.abort();
-  finish({ text: "Олег, поздняя реплика." });
-  await transcriber.queue;
-  assert.equal(decodes, 1);
-  assert.equal(callbacks, 0);
+    const base = { guildId: "g", userId: "1", user: "Илья", timestamp: new Date().toISOString() };
+    agent.onTranscript({ ...base, text: "Олег!" });
+    agent.onTranscript({ ...base, text: "Олег!" }); // Duplicate must not close the activation window.
+    agent.onTranscript({ ...base, userId: "2", user: "Игорь", text: "Я говорю с другим человеком." });
+    assert.equal(requests, 0);
+    agent.onTranscript({ ...base, text: "Запомни имя." });
+    assert.equal(requests, 1);
+    agent.onTranscript({ ...base, text: "Олег, не запоминай." });
+    assert.deepEqual(corrections, ["Олег, не запоминай."]);
+    assert.equal(requests, 1);
+    // Simulate the LLM already finishing while VoiceAgent still owns the turn.
+    generating = false;
+    const oldFinish = finish;
+    agent.onTranscript({ ...base, text: "Олег, лучше скажи время." });
+    assert.equal(requests, 2);
+    assert.equal(aborted, 1);
+    oldFinish("Устаревший ответ.");
+    agent.clear("g");
+    finish("Поздний ответ после выхода.");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(history.entries.filter((entry) => entry.kind === "assistant").length, 0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("proactive judge rejects stale decisions after speech, transcripts or leaving", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-stale-judge-"));
+  try {
+    const config = new AppConfig(directory, { discordToken: "test" });
+    config.setOverride("agent.auto_participation.mode", "on");
+    for (const change of ["speech", "transcript", "leave"] as const) {
+      const history = new HistoryStore(join(directory, `${change}.jsonl`));
+      let resolveJudge = (_verdict: ReturnType<typeof parseAutoParticipationVerdict>): void => undefined;
+      let quiet = true;
+      let responses = 0;
+      const runtime = {
+        decideAutoParticipation: () =>
+          new Promise<ReturnType<typeof parseAutoParticipationVerdict>>((resolve) => {
+            resolveJudge = resolve;
+          }),
+        completeProactive: async () => {
+          responses++;
+          return "Устаревший ответ";
+        },
+        abort: () => undefined,
+      } as unknown as AgentRuntime;
+      const agent = new VoiceAgent(
+        runtime,
+        history,
+        { synthesize: () => ({ stream: Readable.from([]), done: Promise.resolve(0), cancel: () => undefined }) },
+        () => [{ samples: new Float32Array(), sampleRate: 24_000 }],
+        async () => undefined,
+        () => undefined,
+        config,
+        () => quiet,
+      );
+      // Control the private scheduling boundary without wall-clock timers.
+      const internal = agent as unknown as {
+        conversationVersions: Map<string, number>;
+        considerAutoParticipation(guild: string, version: number): Promise<void>;
+      };
+      internal.conversationVersions.set("g", 1);
+      const pending = internal.considerAutoParticipation("g", 1);
+      if (change === "speech") quiet = false;
+      if (change === "transcript") internal.conversationVersions.set("g", 2);
+      if (change === "leave") agent.clear("g");
+      resolveJudge({ decision: "join", reason: "brief_reaction", replyIntent: "Отреагировать", model: "test" });
+      await pending;
+      assert.equal(responses, 0);
+      assert.ok(
+        history.entries.some((entry) => entry.kind === "auto_participation" && !entry.acted && entry.discarded),
+      );
+      agent.clear("g");
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("Pi blocks obsolete tools on correction and cancels queued runs on abort", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-corrections-"));
+  try {
+    const history = new HistoryStore(join(directory, "history.jsonl"));
+    const skills = new SkillStore(join(directory, "skills"));
+    await skills.load();
+    const faux = fauxProvider();
+    const models = createModels();
+    models.setProvider(faux.provider);
+    let executions = 0;
+    const tool = {
+      ...currentDateTimeTool,
+      execute: async () => {
+        executions++;
+        return { content: [], details: {} };
+      },
+    };
+    const runtime = new AgentRuntime(
+      models,
+      faux.getModel(),
+      [tool],
+      history,
+      skills,
+      new AppConfig(directory, { discordToken: "test" }),
+    );
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("get_current_datetime", {})], { stopReason: "toolUse" }),
+      fauxAssistantMessage("Учёл отмену."),
+    ]);
+    assert.equal(
+      await runtime.complete("Скажи время", () => {
+        assert.equal(runtime.steer("Илья", "Олег, не надо."), true);
+      }),
+      "Учёл отмену.",
+    );
+    assert.equal(executions, 0);
+    const cancelled = runtime.completeScheduled("Не выполнять");
+    const rejected = assert.rejects(cancelled, { name: "AbortError" });
+    runtime.abort();
+    await rejected;
+    faux.appendResponses([fauxAssistantMessage("Новый запуск работает.")]);
+    assert.equal(await runtime.complete("Новый запрос"), "Новый запуск работает.");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("Qwen TTS times out before first audio and on a stalled PCM stream", async (t) => {
@@ -1440,6 +1612,48 @@ test("Qwen TTS times out before first audio and on a stalled PCM stream", async 
     globalThis.fetch = previousFetch;
     t.mock.timers.reset();
   }
+});
+
+test("STT skips cancelled queued work and suppresses results cancelled during decoding", async () => {
+  let decodes = 0;
+  let finish = (_result: { text: string }): void => undefined;
+  const recognizer = {
+    createStream: () => ({ acceptWaveform: () => undefined }),
+    decodeAsync: () => {
+      decodes++;
+      return new Promise<{ text: string }>((resolve) => {
+        finish = resolve;
+      });
+    },
+  };
+  // Exercise the queue independently of model files or inference speed.
+  const transcriber = Reflect.construct(ParakeetTranscriber, [recognizer, {}]) as {
+    enqueue(
+      samples: Float32Array,
+      meta: Omit<Transcript, "text">,
+      callback: (transcript: Transcript) => void,
+      signal: AbortSignal,
+    ): void;
+    queue: Promise<void>;
+  };
+  const abort = new AbortController();
+  let callbacks = 0;
+  const meta = { guildId: "g", userId: "1", user: "Илья", timestamp: new Date().toISOString() };
+  for (let i = 0; i < 2; i++)
+    transcriber.enqueue(
+      new Float32Array(512),
+      meta,
+      () => {
+        callbacks++;
+      },
+      abort.signal,
+    );
+  await new Promise((resolve) => setImmediate(resolve));
+  abort.abort();
+  finish({ text: "Олег, поздняя реплика." });
+  await transcriber.queue;
+  assert.equal(decodes, 1);
+  assert.equal(callbacks, 0);
 });
 
 test("Discord session drops capture callbacks after stop and cancels broken playback", async () => {
