@@ -116,7 +116,10 @@ export class DiscordBot {
 
   async speak(guildId: string, audio: VoiceAudio): Promise<void> {
     const capture = this.captures.get(guildId);
-    if (!capture) throw new Error("Voice connection is no longer active");
+    if (!capture) {
+      if ("stream" in audio) audio.cancel();
+      throw new Error("Voice connection is no longer active");
+    }
     await capture.speak(audio);
   }
 

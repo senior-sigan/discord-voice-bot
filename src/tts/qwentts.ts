@@ -36,6 +36,8 @@ export class QwenTts implements Tts {
     const abort = new AbortController();
     let cancelled = false;
     let sampleCount = 0;
+    let timeout = setTimeout(() => abort.abort(new Error("Qwen TTS first audio timeout")), 30_000);
+    timeout.unref();
 
     const done = (async () => {
       const started = performance.now();
@@ -71,6 +73,11 @@ export class QwenTts implements Tts {
                 ttfa: `${((performance.now() - started) / 1_000).toFixed(2)}s`,
               });
             }
+            if (samples.length) {
+              clearTimeout(timeout);
+              timeout = setTimeout(() => abort.abort(new Error("Qwen TTS audio stream stalled")), 10_000);
+              timeout.unref();
+            }
             sampleCount += samples.length;
             const output = resampler.resample(samples);
             if (output.length && !cancelled) stream.write(floatMonoToStereoPcm(output));
@@ -88,6 +95,7 @@ export class QwenTts implements Tts {
           throw error;
         }
       } finally {
+        clearTimeout(timeout);
         if (!stream.destroyed) stream.end();
       }
 
@@ -107,6 +115,7 @@ export class QwenTts implements Tts {
       done,
       cancel: () => {
         cancelled = true;
+        clearTimeout(timeout);
         abort.abort();
         stream.end();
       },

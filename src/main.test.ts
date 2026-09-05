@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import test from "node:test";
 
 import {
@@ -27,6 +28,7 @@ import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio
 import { formatMessageTime } from "./common.js";
 import { AppConfig, dataPath } from "./config.js";
 import { enteredVoiceChannel } from "./discord/bot.js";
+import { DiscordVoiceSession } from "./discord/voice-session.js";
 import { startLocalControlServer } from "./local-control.js";
 import { TaskScheduler } from "./scheduler.js";
 import { isRetryableLlmError, parseExplanation, resizeImageForLlm } from "./scripts/explain-memes.js";
@@ -40,7 +42,7 @@ import {
   validateProposals,
 } from "./scripts/sleep.js";
 import { ParakeetTranscriber } from "./stt/parakeet.js";
-import type { Transcript } from "./stt/types.js";
+import type { Transcriber, Transcript } from "./stt/types.js";
 import { SpeechSegmenter } from "./stt/vad.js";
 import { currentDateTimeTool } from "./tools/datetime.js";
 import { createDiscordTools, safeImagePath } from "./tools/discord.js";
@@ -1396,4 +1398,116 @@ test("STT skips cancelled queued work and suppresses results cancelled during de
   await transcriber.queue;
   assert.equal(decodes, 1);
   assert.equal(callbacks, 0);
+});
+
+test("Qwen TTS times out before first audio and on a stalled PCM stream", async (t) => {
+  const previousFetch = globalThis.fetch;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const config = {
+      base_url: "https://tts.example/v1",
+      sample_rate: 24_000,
+      model: "test",
+      voice: "test",
+      voices: ["test"],
+    };
+    const tts = await QwenTts.create(() => config);
+    for (const stalled of [false, true]) {
+      globalThis.fetch = (async (_input, init) => {
+        const signal = init?.signal;
+        assert.ok(signal);
+        if (!stalled)
+          return new Promise<Response>((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array([0, 1]));
+              signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+            },
+          }),
+        );
+      }) as typeof fetch;
+      const audio = tts.synthesize("Привет");
+      const rejected = assert.rejects(audio.done, stalled ? /stream stalled/u : /first audio timeout/u);
+      await new Promise((resolve) => setImmediate(resolve));
+      t.mock.timers.tick(stalled ? 10_000 : 30_000);
+      await rejected;
+      assert.equal(audio.stream.destroyed, true);
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+    t.mock.timers.reset();
+  }
+});
+
+test("Discord session drops capture callbacks after stop and cancels broken playback", async () => {
+  const speaking = new EventEmitter();
+  const receive = new PassThrough();
+  let onTranscript = (_transcript: Transcript): void => undefined;
+  let captureSignal: AbortSignal | undefined;
+  let delivered = 0;
+  const transcriber: Transcriber = {
+    createInput: (_meta, callback, signal) => {
+      onTranscript = callback;
+      captureSignal = signal;
+      return { accept: () => undefined, finish: () => undefined };
+    },
+  };
+  const connection = {
+    subscribe: () => ({}),
+    receiver: { speaking, subscribe: () => receive },
+  } as unknown as ConstructorParameters<typeof DiscordVoiceSession>[0];
+  const guild = { id: "g", members: { cache: new Map() } } as unknown as ConstructorParameters<
+    typeof DiscordVoiceSession
+  >[1];
+  const session = new DiscordVoiceSession(connection, guild, transcriber, "bot", () => {
+    delivered++;
+  });
+  speaking.emit("start", "1");
+  assert.ok(captureSignal);
+
+  class Player extends EventEmitter {
+    state = { status: "idle" };
+    play(): void {
+      const old = this.state;
+      this.state = { status: "playing" };
+      this.emit("stateChange", old, this.state);
+    }
+    stop(): void {
+      const old = this.state;
+      this.state = { status: "idle" };
+      this.emit("stateChange", old, this.state);
+    }
+  }
+  const player = new Player();
+  (session as unknown as { player: Player }).player = player;
+  let cancellations = 0;
+  const stream = new PassThrough();
+  const audio = {
+    stream,
+    done: new Promise<number>(() => undefined),
+    cancel: () => {
+      cancellations++;
+      stream.destroy();
+    },
+  };
+  const failed = assert.rejects(session.speak(audio), /broken player/u);
+  await new Promise((resolve) => setImmediate(resolve));
+  player.emit("error", new Error("broken player"));
+  await failed;
+  assert.ok(cancellations > 0);
+
+  const secondStream = new PassThrough();
+  const interrupted = assert.rejects(
+    session.speak({ ...audio, stream: secondStream, cancel: () => secondStream.destroy() }),
+    { name: "AbortError" },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  session.stop();
+  await interrupted;
+  assert.equal(captureSignal.aborted, true);
+  onTranscript({ guildId: "g", userId: "1", user: "Илья", timestamp: new Date().toISOString(), text: "Олег!" });
+  assert.equal(delivered, 0);
 });

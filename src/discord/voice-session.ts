@@ -30,6 +30,7 @@ export class DiscordVoiceSession {
   private readonly pendingAudio = new Set<VoiceAudio>();
   private playbackQueue: Promise<void> = Promise.resolve();
   private playbackGeneration = 0;
+  private playbackAbort = new AbortController();
   private stopped = false;
   private readonly abort = new AbortController();
   private readonly inputs = new Map<string, SpeechInput>();
@@ -41,7 +42,7 @@ export class DiscordVoiceSession {
     private readonly botUserId: string,
     private readonly onTranscript: (transcript: Transcript) => void,
   ) {
-    this.player = createAudioPlayer();
+    this.player = createAudioPlayer({ behaviors: { maxMissedFrames: 500 } });
     if (!connection.subscribe(this.player)) throw new Error("Failed to subscribe audio player");
     this.player.on("error", (error) =>
       log("error", "audio playback failed", {
@@ -111,9 +112,13 @@ export class DiscordVoiceSession {
       .then(() => {
         if (generation !== this.playbackGeneration || this.stopped) {
           if ("stream" in audio) audio.cancel();
-          return;
+          throw new DOMException("Speech interrupted", "AbortError");
         }
         return this.playNow(audio, generation);
+      })
+      .catch((error: unknown) => {
+        if ("stream" in audio) audio.cancel();
+        throw error;
       })
       .finally(() => this.pendingAudio.delete(audio));
     this.playbackQueue = next.catch(() => undefined);
@@ -130,38 +135,57 @@ export class DiscordVoiceSession {
   }
 
   private async playNow(audio: VoiceAudio, generation: number): Promise<void> {
-    if (this.stopped) return;
-    if ("stream" in audio) {
-      const resource = createAudioResource(audio.stream, { inputType: StreamType.Raw });
+    const waits = new AbortController();
+    const signal = AbortSignal.any([this.playbackAbort.signal, waits.signal, AbortSignal.timeout(180_000)]);
+    const resource =
+      "stream" in audio
+        ? createAudioResource(audio.stream, { inputType: StreamType.Raw })
+        : createAudioResource(
+            Readable.from([floatMonoToStereoPcm(new LinearResampler(audio.sampleRate, 48_000).flush(audio.samples))]),
+            { inputType: StreamType.Raw },
+          );
+    let onError = (_error: Error): void => undefined;
+    let onAbort = (): void => undefined;
+    const failed = new Promise<never>((_resolve, reject) => {
+      onError = reject;
+      onAbort = () => reject(signal.reason);
+      this.player.once("error", onError);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      signal.throwIfAborted();
       this.player.play(resource);
-      await entersState(this.player, AudioPlayerStatus.Playing, 5_000).catch((error: unknown) => {
-        if (generation === this.playbackGeneration) throw error;
-      });
-      if (generation !== this.playbackGeneration) return;
-      const duration = await audio.done;
-      if (generation !== this.playbackGeneration) return;
-      await entersState(this.player, AudioPlayerStatus.Idle, Math.max(10_000, Math.ceil(duration * 2_000)));
-      return;
+      const playback = (async () => {
+        const firstAudio = AbortSignal.any([signal, AbortSignal.timeout(35_000)]);
+        await entersState(this.player, AudioPlayerStatus.Playing, firstAudio).catch((error: unknown) => {
+          throw firstAudio.aborted ? firstAudio.reason : error;
+        });
+        await Promise.all([
+          "stream" in audio ? audio.done : Promise.resolve(),
+          entersState(this.player, AudioPlayerStatus.Idle, signal).then(() => {
+            if ("stream" in audio && !audio.stream.readableEnded) {
+              throw new Error("Playback ended before the TTS stream was consumed");
+            }
+          }),
+        ]);
+      })();
+      await Promise.race([playback, failed]);
+      signal.throwIfAborted();
+    } catch (error) {
+      if ("stream" in audio) audio.cancel();
+      if (generation === this.playbackGeneration) this.player.stop(true);
+      throw signal.aborted ? signal.reason : error;
+    } finally {
+      this.player.off("error", onError);
+      signal.removeEventListener("abort", onAbort);
+      waits.abort();
     }
-    const resampler = new LinearResampler(audio.sampleRate, 48_000);
-    const samples = resampler.flush(audio.samples);
-    const resource = createAudioResource(Readable.from([floatMonoToStereoPcm(samples)]), {
-      inputType: StreamType.Raw,
-    });
-    this.player.play(resource);
-    await entersState(this.player, AudioPlayerStatus.Playing, 5_000).catch((error: unknown) => {
-      if (generation === this.playbackGeneration) throw error;
-    });
-    if (generation !== this.playbackGeneration) return;
-    await entersState(
-      this.player,
-      AudioPlayerStatus.Idle,
-      Math.max(10_000, Math.ceil((samples.length / 48_000) * 2_000)),
-    );
   }
 
   interruptSpeech(): void {
     this.playbackGeneration++;
+    this.playbackAbort.abort();
+    this.playbackAbort = new AbortController();
     for (const audio of this.pendingAudio) {
       if ("stream" in audio) audio.cancel();
     }
