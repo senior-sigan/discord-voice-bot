@@ -9,6 +9,11 @@ import { textResult, toolSignal } from "./types.js";
 const IMAGE_EXTENSIONS = new Set([".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);
 
 export interface DiscordToolsClient {
+  currentVoiceChannel(): string;
+  voiceChannels(): Promise<
+    Array<{ id: string; name: string; category: string | null; current: boolean; joinable: boolean }>
+  >;
+  moveVoice(channel: string, signal?: AbortSignal): Promise<{ id: string; name: string; moved: boolean }>;
   voiceMembers(channel: string): Promise<Array<{ id: string; name: string; bot: boolean }>>;
   sendMessage(channel: string, content?: string, imagePath?: string): Promise<{ id: string; url: string }>;
   readMessages(
@@ -33,6 +38,17 @@ export interface DiscordToolsClient {
   soundboardSounds(): Promise<Array<{ id: string; name: string; emoji?: string }>>;
   playSoundboard(channel: string, soundId: string): Promise<{ id: string; name: string }>;
 }
+
+const moveVoiceParameters = Type.Object(
+  {
+    channel: Type.String({
+      minLength: 1,
+      maxLength: 100,
+      description: "Точное название или ID целевого голосового канала",
+    }),
+  },
+  { additionalProperties: false },
+);
 
 const membersParameters = Type.Object({}, { additionalProperties: false });
 const soundsParameters = Type.Object({}, { additionalProperties: false });
@@ -76,11 +92,12 @@ export function createDiscordTools(discord: DiscordToolsClient): AgentTool[] {
   const members: AgentTool<typeof membersParameters> = {
     name: "discord_channel_members",
     label: "Участники голосового канала",
-    description: "Показывает, кто сейчас находится вместе с агентом в голосовом канале master.",
+    description: "Показывает, кто сейчас находится вместе с агентом в текущем голосовом канале.",
     parameters: membersParameters,
     async execute() {
-      const users = await discord.voiceMembers("master");
-      return textResult({ channel: "master", count: users.length, members: users });
+      const channel = discord.currentVoiceChannel();
+      const users = await discord.voiceMembers(channel);
+      return textResult({ channel, count: users.length, members: users });
     },
   };
   const send: AgentTool<typeof sendParameters> = {
@@ -149,12 +166,13 @@ export function createDiscordTools(discord: DiscordToolsClient): AgentTool[] {
     name: "discord_soundboard_play",
     label: "Воспроизвести звук Discord",
     description:
-      "Молча воспроизводит один выбранный soundboard-звук в голосовом канале master. Используй редко и только когда звук точно подходит к ситуации.",
+      "Молча воспроизводит один выбранный soundboard-звук в текущем голосовом канале. Используй редко и только когда звук точно подходит к ситуации.",
     parameters: playSoundParameters,
     async execute(_toolCallId, args) {
       const soundId = args.sound_id.trim();
       if (!soundId) throw new Error("sound_id must not be blank");
-      return textResult({ channel: "master", ...(await discord.playSoundboard("master", soundId)) });
+      const channel = discord.currentVoiceChannel();
+      return textResult({ channel, ...(await discord.playSoundboard(channel, soundId)) });
     },
   };
   const readImage: AgentTool<typeof readImageParameters> = {
@@ -209,7 +227,31 @@ export function createDiscordTools(discord: DiscordToolsClient): AgentTool[] {
       }
     },
   };
-  return [members, send, readMessages, sounds, playSound, readImage];
+  const voiceChannels: AgentTool<typeof membersParameters> = {
+    name: "discord_voice_channels",
+    label: "Голосовые каналы Discord",
+    description:
+      "Показывает обычные голосовые каналы сервера, их ID, категории, текущий канал и возможность подключения. Используй перед переходом, если точный канал неизвестен. Stage-каналы не поддерживаются.",
+    parameters: membersParameters,
+    async execute() {
+      const channels = await discord.voiceChannels();
+      return textResult({ count: channels.length, channels });
+    },
+  };
+  const moveVoice: AgentTool<typeof moveVoiceParameters> = {
+    name: "discord_move_voice",
+    label: "Перейти в голосовой канал",
+    description:
+      "Переводит самого Олега в указанный голосовой канал этого сервера. Используй только по просьбе участника перейти; людей не перемещает. При неоднозначном названии сначала уточни канал по списку discord_voice_channels. После успешного перехода ответ будет озвучен в новом канале.",
+    parameters: moveVoiceParameters,
+    async execute(_toolCallId, args, signal) {
+      const channel = args.channel.trim();
+      if (!channel) throw new Error("channel must not be blank");
+      signal?.throwIfAborted();
+      return textResult(await discord.moveVoice(channel, signal));
+    },
+  };
+  return [members, send, readMessages, sounds, playSound, readImage, voiceChannels, moveVoice];
 }
 
 function parseDiscordDate(value: string): Date {

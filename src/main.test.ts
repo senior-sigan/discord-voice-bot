@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import test from "node:test";
 
+import { VoiceConnectionStatus } from "@discordjs/voice";
 import {
   createModels,
   fauxAssistantMessage,
@@ -15,6 +16,7 @@ import {
   validateToolCall,
 } from "@earendil-works/pi-ai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
+import { ChannelType } from "discord.js";
 
 import { autoParticipationCommand, parseAutoParticipationVerdict } from "./agent/auto-participation.js";
 import { type HistoryEntry, HistoryStore, searchHistory } from "./agent/history.js";
@@ -27,7 +29,7 @@ import { formatVoiceContextTime, VoiceAgent } from "./agent/voice-agent.js";
 import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio.js";
 import { formatMessageTime } from "./common.js";
 import { AppConfig, dataPath } from "./config.js";
-import { enteredVoiceChannel } from "./discord/bot.js";
+import { DiscordBot, enteredVoiceChannel } from "./discord/bot.js";
 import { DiscordVoiceSession } from "./discord/voice-session.js";
 import { startLocalControlServer } from "./local-control.js";
 import { TaskScheduler } from "./scheduler.js";
@@ -733,6 +735,11 @@ test("Discord tools list members, read text channels, and send workspace images 
     writeFileSync(image, "test");
     const calls: unknown[][] = [];
     const [members, send, readMessages, sounds, playSound] = createDiscordTools({
+      currentVoiceChannel: () => "master",
+      voiceChannels: async () => [],
+      moveVoice: async () => {
+        throw new Error("not used by this test");
+      },
       async voiceMembers(channel) {
         calls.push(["members", channel]);
         return [{ id: "1", name: "Илья", bot: false }];
@@ -826,6 +833,11 @@ test("Discord tools list members, read text channels, and send workspace images 
 
 test("Discord text reader reports unavailable access without inventing messages", async () => {
   const tools = createDiscordTools({
+    currentVoiceChannel: () => "master",
+    voiceChannels: async () => [],
+    moveVoice: async () => {
+      throw new Error("not used by this test");
+    },
     async voiceMembers() {
       return [];
     },
@@ -861,6 +873,11 @@ test("Discord image reader returns an attachment as model image content", async 
       return new Response(Buffer.from("png"), { headers: { "content-type": "image/png" } });
     }) as typeof fetch;
     const tools = createDiscordTools({
+      currentVoiceChannel: () => "master",
+      voiceChannels: async () => [],
+      moveVoice: async () => {
+        throw new Error("not used by this test");
+      },
       async voiceMembers() {
         return [];
       },
@@ -1724,4 +1741,167 @@ test("Discord session drops capture callbacks after stop and cancels broken play
   assert.equal(captureSignal.aborted, true);
   onTranscript({ guildId: "g", userId: "1", user: "Илья", timestamp: new Date().toISOString(), text: "Олег!" });
   assert.equal(delivered, 0);
+});
+
+test("voice move tool validates destinations, waits for Ready and follows the current channel", async () => {
+  const played: string[] = [];
+  const members = new Map([["user", { id: "user", displayName: "Илья", user: { bot: false } }]]);
+  const channel = (id: string, name: string, joinable = true) => ({
+    id,
+    name,
+    type: ChannelType.GuildVoice,
+    viewable: true,
+    joinable,
+    speakable: true,
+    parent: { name: "Разговоры" },
+    members,
+    sendSoundboardSound: async () => {
+      played.push(id);
+    },
+  });
+  const channels = new Map([
+    ["1", channel("1", "master")],
+    ["2", channel("2", "Игровая")],
+    ["3", channel("3", "Одинаковая")],
+    ["4", channel("4", "Одинаковая")],
+    ["5", channel("5", "Закрытая", false)],
+    ["6", { ...channel("6", "Сцена"), type: ChannelType.GuildStageVoice }],
+  ]);
+  class Connection extends EventEmitter {
+    state = { status: VoiceConnectionStatus.Ready };
+    joinConfig = { guildId: "guild", channelId: "1", selfDeaf: false, selfMute: false };
+    receiver = { speaking: new EventEmitter() };
+    attempts: string[] = [];
+    autoReady = false;
+    failChannel: string | undefined;
+    transition(status: VoiceConnectionStatus): void {
+      const old = this.state;
+      this.state = { status };
+      this.emit("stateChange", old, this.state);
+      this.emit(status, old, this.state);
+    }
+    subscribe(): object {
+      return {};
+    }
+    disconnect(): boolean {
+      this.transition(VoiceConnectionStatus.Disconnected);
+      return true;
+    }
+    rejoin(config: typeof this.joinConfig): boolean {
+      Object.assign(this.joinConfig, config);
+      this.attempts.push(config.channelId);
+      if (config.channelId === this.failChannel) return false;
+      this.transition(VoiceConnectionStatus.Signalling);
+      if (this.autoReady)
+        queueMicrotask(() => {
+          if (this.state.status !== VoiceConnectionStatus.Destroyed) this.transition(VoiceConnectionStatus.Ready);
+        });
+      return true;
+    }
+    destroy(): void {
+      this.transition(VoiceConnectionStatus.Destroyed);
+    }
+  }
+  const connection = new Connection();
+  const bot = new DiscordBot("test", "guild", {
+    createInput: () => {
+      throw new Error("no real audio in this test");
+    },
+  });
+  const internal = bot as unknown as {
+    client: object;
+    captures: Map<string, { connection: Connection; stop(): void }>;
+  };
+  internal.client = {
+    user: { id: "bot" },
+    guilds: {
+      cache: new Map([
+        [
+          "guild",
+          {
+            id: "guild",
+            channels: { cache: channels },
+            members: { cache: new Map() },
+            soundboardSounds: { fetch: async () => ({ soundId: "sound", name: "Бум", available: true }) },
+          },
+        ],
+      ]),
+    },
+  };
+  let cleared = 0;
+  let stopped = 0;
+  bot.setAgent({
+    onTranscript: () => undefined,
+    onVoiceMemberJoined: () => undefined,
+    clear: () => {
+      cleared++;
+    },
+  });
+  internal.captures.set("guild", {
+    connection,
+    stop: () => {
+      stopped++;
+    },
+  });
+  const tools = createDiscordTools(bot);
+  const move = tools.find((tool) => tool.name === "discord_move_voice");
+  const list = tools.find((tool) => tool.name === "discord_voice_channels");
+  const membersTool = tools.find((tool) => tool.name === "discord_channel_members");
+  const sound = tools.find((tool) => tool.name === "discord_soundboard_play");
+  assert.ok(move && list && membersTool && sound);
+  try {
+    const listing = (await list.execute("list", {})).details as { channels: Array<{ id: string; current: boolean }> };
+    assert.equal(listing.channels.length, 5);
+    assert.equal(listing.channels.find((item) => item.current)?.id, "1");
+    for (const invalid of [" ", "Несуществующая", "Одинаковая", "Закрытая", "Сцена"]) {
+      await assert.rejects(move.execute("invalid", { channel: invalid }));
+    }
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await assert.rejects(move.execute("cancelled", { channel: "2" }, cancelled.signal), { name: "AbortError" });
+    assert.equal(stopped, 0);
+    assert.deepEqual((await move.execute("same", { channel: "master" })).details, {
+      id: "1",
+      name: "master",
+      moved: false,
+    });
+
+    let settled = false;
+    const moving = move.execute("move", { channel: " игровая " }).then((result) => {
+      settled = true;
+      return result;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false); // Old Ready must never be mistaken for success.
+    await assert.rejects(move.execute("concurrent", { channel: "3" }), /already in progress/u);
+    connection.transition(VoiceConnectionStatus.Ready);
+    assert.deepEqual((await moving).details, { id: "2", name: "Игровая", moved: true });
+    assert.equal(stopped, 1);
+    assert.equal(cleared, 0); // Preserve the agent run that owns this tool.
+    assert.equal(bot.currentVoiceChannel(), "2");
+    assert.equal((await membersTool.execute("members", {})).details?.channel, "2");
+    await sound.execute("sound", { sound_id: "sound" });
+    assert.deepEqual(played, ["2"]);
+
+    connection.autoReady = true;
+    connection.failChannel = "3";
+    await assert.rejects(move.execute("failed", { channel: "3" }), /rejected/u);
+    assert.equal(bot.currentVoiceChannel(), "2");
+    assert.deepEqual(connection.attempts.slice(-2), ["3", "2"]);
+    connection.failChannel = undefined;
+    assert.equal((await move.execute("by-id", { channel: "4" })).details?.id, "4");
+
+    connection.autoReady = false;
+    const leave = new AbortController();
+    const pending = assert.rejects(move.execute("leave-during-move", { channel: "2" }, leave.signal));
+    connection.destroy();
+    leave.abort();
+    await pending;
+    assert.equal(connection.state.status, VoiceConnectionStatus.Destroyed);
+    assert.equal(connection.attempts.at(-1), "2"); // No rollback after an explicit leave.
+    assert.throws(() => bot.currentVoiceChannel(), /not connected/u);
+  } finally {
+    for (const capture of internal.captures.values()) capture.stop();
+    connection.destroy();
+  }
 });

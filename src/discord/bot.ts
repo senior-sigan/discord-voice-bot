@@ -1,5 +1,11 @@
-import { entersState, getVoiceConnection, joinVoiceChannel, VoiceConnectionStatus } from "@discordjs/voice";
-import type { Guild, Interaction } from "discord.js";
+import {
+  entersState,
+  getVoiceConnection,
+  joinVoiceChannel,
+  type VoiceConnection,
+  VoiceConnectionStatus,
+} from "@discordjs/voice";
+import type { Guild, Interaction, VoiceChannel } from "discord.js";
 import {
   ChannelType,
   Client,
@@ -60,6 +66,7 @@ export class DiscordBot {
   });
   private agent: DiscordAgent | undefined;
   private stopped = false;
+  private moving = false;
 
   constructor(
     private readonly token: string,
@@ -123,13 +130,91 @@ export class DiscordBot {
     await capture.speak(audio);
   }
 
+  currentVoiceChannel(): string {
+    const id = this.captures.get(this.guildId)?.connection.joinConfig.channelId;
+    if (!id) throw new Error("The agent is not connected to a voice channel");
+    return id;
+  }
+
+  async voiceChannels(): Promise<
+    Array<{ id: string; name: string; category: string | null; current: boolean; joinable: boolean }>
+  > {
+    const guild = this.client.guilds.cache.get(this.guildId);
+    if (!guild) throw new Error(`Discord guild not found: ${this.guildId}`);
+    const current = this.captures.get(this.guildId)?.connection.joinConfig.channelId;
+    return [...guild.channels.cache.values()]
+      .filter((channel): channel is VoiceChannel => channel.type === ChannelType.GuildVoice && channel.viewable)
+      .map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+        category: channel.parent?.name ?? null,
+        current: channel.id === current,
+        joinable: channel.joinable && channel.speakable,
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name, "ru"));
+  }
+
+  async moveVoice(requested: string, signal?: AbortSignal): Promise<{ id: string; name: string; moved: boolean }> {
+    signal?.throwIfAborted();
+    if (this.stopped) throw new Error("Discord bot is stopped");
+    if (this.moving) throw new Error("A voice channel move is already in progress");
+    const guild = this.client.guilds.cache.get(this.guildId);
+    if (!guild) throw new Error(`Discord guild not found: ${this.guildId}`);
+    const channel = this.resolveVoiceChannel(guild, requested);
+    const capture = this.captures.get(guild.id);
+    if (!capture) throw new Error("The agent is not connected; use /voice join first");
+    const connection = capture.connection;
+    const previousConfig = { ...connection.joinConfig };
+    const previousId = previousConfig.channelId;
+    if (!previousId) throw new Error("The current voice channel is unknown");
+    if (previousId === channel.id && connection.state.status === VoiceConnectionStatus.Ready) {
+      return { id: channel.id, name: channel.name, moved: false };
+    }
+    if (!channel.joinable || !channel.speakable)
+      throw new Error("Cannot join or speak in the requested channel (permissions or channel capacity)");
+
+    this.moving = true;
+    try {
+      capture.stop();
+      this.captures.delete(guild.id);
+      // Leave transport only: clearing the agent here would abort this tool's own run.
+      // disconnect() also prevents entersState(Ready) from accepting the old channel's Ready state.
+      if (!connection.disconnect() || !connection.rejoin({ ...previousConfig, channelId: channel.id })) {
+        throw new Error("Discord rejected the voice channel move");
+      }
+      await entersState(
+        connection,
+        VoiceConnectionStatus.Ready,
+        signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : 20_000,
+      );
+      signal?.throwIfAborted();
+      this.attachVoice(guild, connection);
+      log("info", "moved voice channel", { from: previousId, to: channel.id, channel: channel.name });
+      return { id: channel.id, name: channel.name, moved: true };
+    } catch (error) {
+      // A concurrent /voice leave or shutdown destroys this connection; never resurrect it.
+      if (!this.stopped && connection.state.status !== VoiceConnectionStatus.Destroyed) {
+        try {
+          if (!connection.disconnect() || !connection.rejoin(previousConfig))
+            throw new Error("Voice rollback rejected");
+          await entersState(connection, VoiceConnectionStatus.Ready, 5_000);
+          this.attachVoice(guild, connection);
+        } catch (restoreError) {
+          if ((connection.state.status as VoiceConnectionStatus) !== VoiceConnectionStatus.Destroyed)
+            connection.destroy();
+          log("error", "voice channel restore failed", { error: errorMessage(restoreError) });
+        }
+      }
+      throw error;
+    } finally {
+      this.moving = false;
+    }
+  }
+
   async voiceMembers(channelName: string): Promise<Array<{ id: string; name: string; bot: boolean }>> {
     const guild = this.client.guilds.cache.get(this.guildId);
     if (!guild) throw new Error(`Discord guild not found: ${this.guildId}`);
-    const channel = guild.channels.cache.find(
-      (candidate) => candidate.isVoiceBased() && candidate.name.toLowerCase() === channelName.toLowerCase(),
-    );
-    if (!channel?.isVoiceBased()) throw new Error(`voice channel not found: ${channelName}`);
+    const channel = this.resolveVoiceChannel(guild, channelName);
     return [...channel.members.values()]
       .filter((member) => member.id !== this.client.user?.id)
       .map((member) => ({ id: member.id, name: member.displayName, bot: member.user.bot }))
@@ -242,11 +327,7 @@ export class DiscordBot {
   async playSoundboard(channelName: string, soundId: string): Promise<{ id: string; name: string }> {
     const guild = this.client.guilds.cache.get(this.guildId);
     if (!guild) throw new Error(`Discord guild not found: ${this.guildId}`);
-    const channel = guild.channels.cache.find(
-      (candidate) =>
-        candidate.type === ChannelType.GuildVoice && candidate.name.toLowerCase() === channelName.toLowerCase(),
-    );
-    if (channel?.type !== ChannelType.GuildVoice) throw new Error(`voice channel not found: ${channelName}`);
+    const channel = this.resolveVoiceChannel(guild, channelName);
     const sound = await guild.soundboardSounds.fetch(soundId);
     if (!sound.available) throw new Error(`soundboard sound is unavailable: ${soundId}`);
     await channel.sendSoundboardSound(sound);
@@ -301,17 +382,14 @@ export class DiscordBot {
       const channelName = await this.joinVoice(interaction.guild, interaction.options.getString("channel", true));
       await interaction.editReply(`Подключился к **${channelName}**.`);
     } catch (error: unknown) {
-      this.leaveVoice(interaction.guildId);
       log("error", "voice command failed", { error: errorMessage(error) });
       await interaction.editReply(`Ошибка: ${errorMessage(error)}`);
     }
   }
 
   private async joinVoice(guild: Guild, requestedName: string): Promise<string> {
-    const channel = guild.channels.cache.find(
-      (candidate) => candidate.isVoiceBased() && candidate.name.toLowerCase() === requestedName.toLowerCase(),
-    );
-    if (!channel) throw new Error(`voice channel not found: ${requestedName}`);
+    const channel = this.resolveVoiceChannel(guild, requestedName);
+    if (!channel.joinable || !channel.speakable) throw new Error("Cannot join or speak in the requested channel");
 
     this.leaveVoice(guild.id);
     const connection = joinVoiceChannel({
@@ -322,7 +400,20 @@ export class DiscordBot {
       selfMute: false,
     });
     connection.on("error", (error) => log("error", "voice connection failed", { error: error.message }));
-    await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+      this.attachVoice(guild, connection);
+      log("info", "joined voice channel", { channel: channel.name });
+      return channel.name;
+    } catch (error) {
+      if (connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
+      throw error;
+    }
+  }
+
+  private attachVoice(guild: Guild, connection: VoiceConnection): void {
+    if (this.stopped || connection.state.status !== VoiceConnectionStatus.Ready)
+      throw new Error("Voice connection is no longer ready");
     const botUserId = this.client.user?.id;
     if (!botUserId) throw new Error("Discord client is not ready");
     this.captures.set(
@@ -331,7 +422,23 @@ export class DiscordBot {
         this.agent?.onTranscript(transcript),
       ),
     );
-    log("info", "joined voice channel", { channel: channel.name });
-    return channel.name;
+  }
+
+  private resolveVoiceChannel(guild: Guild, requested: string): VoiceChannel {
+    const name = requested.trim().toLocaleLowerCase("ru-RU");
+    if (!name) throw new Error("channel must not be blank");
+    const channels = [...guild.channels.cache.values()].filter(
+      (channel): channel is VoiceChannel => channel.type === ChannelType.GuildVoice && channel.viewable,
+    );
+    const byId = channels.find((channel) => channel.id === name);
+    if (byId) return byId;
+    const matches = channels.filter((channel) => channel.name.toLocaleLowerCase("ru-RU") === name);
+    if (matches.length > 1)
+      throw new Error(
+        `Ambiguous voice channel; use an ID: ${matches.map((channel) => `${channel.name} (${channel.id})`).join(", ")}`,
+      );
+    const channel = matches[0];
+    if (!channel) throw new Error(`Voice channel not found: ${requested}`);
+    return channel;
   }
 }
