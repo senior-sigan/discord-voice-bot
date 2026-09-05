@@ -17,6 +17,7 @@ import { floatMonoToStereoPcm, stereoPcmToMono } from "../audio.js";
 import { errorMessage, log } from "../common.js";
 import type { Transcriber, Transcript } from "../stt/index.js";
 import { SAMPLE_RATE } from "../stt/index.js";
+import type { SpeechInput } from "../stt/types.js";
 import type { VoiceAudio } from "../tts/index.js";
 
 const { OpusEncoder } = opus;
@@ -30,6 +31,8 @@ export class DiscordVoiceSession {
   private playbackQueue: Promise<void> = Promise.resolve();
   private playbackGeneration = 0;
   private stopped = false;
+  private readonly abort = new AbortController();
+  private readonly inputs = new Map<string, SpeechInput>();
 
   constructor(
     readonly connection: VoiceConnection,
@@ -50,25 +53,32 @@ export class DiscordVoiceSession {
   }
 
   private capture(userId: string): void {
-    if (userId === this.botUserId || this.active.has(userId)) return;
+    if (this.stopped || userId === this.botUserId || this.active.has(userId)) return;
     const user = this.guild.members.cache.get(userId)?.displayName ?? "unknown";
     const stream = this.connection.receiver.subscribe(userId, {
-      end: { behavior: EndBehaviorType.AfterInactivity, duration: 400 },
+      end: { behavior: EndBehaviorType.AfterInactivity, duration: 500 },
     });
     const decoder = new OpusEncoder(48_000, 2);
     const resampler = new LinearResampler(48_000, SAMPLE_RATE);
-    const chunks: Float32Array[] = [];
-    let sampleCount = 0;
+    let input = this.inputs.get(userId);
+    if (!input) {
+      input = this.transcriber.createInput(
+        { guildId: this.guild.id, userId, user },
+        (transcript) => {
+          if (!this.stopped) this.onTranscript(transcript);
+        },
+        this.abort.signal,
+      );
+      this.inputs.set(userId, input);
+    }
+    const speech = input;
     let finished = false;
     this.active.set(userId, stream);
 
     stream.on("data", (packet: Buffer) => {
       try {
         const samples = resampler.resample(stereoPcmToMono(decoder.decode(packet)));
-        if (samples.length) {
-          chunks.push(samples);
-          sampleCount += samples.length;
-        }
+        speech.accept(samples);
       } catch (error) {
         log("error", "audio packet failed", { user, error: errorMessage(error) });
       }
@@ -79,27 +89,11 @@ export class DiscordVoiceSession {
       finished = true;
       this.active.delete(userId);
       try {
-        const tail = resampler.flush(new Float32Array());
-        if (tail.length) {
-          chunks.push(tail);
-          sampleCount += tail.length;
-        }
+        if (!this.stopped) speech.accept(resampler.flush(new Float32Array()));
+        speech.finish();
       } catch (error) {
-        log("error", "audio resampler flush failed", { user, error: errorMessage(error) });
+        log("error", "audio input flush failed", { user, error: errorMessage(error) });
       }
-      if (sampleCount < SAMPLE_RATE / 5) return;
-
-      const samples = new Float32Array(sampleCount);
-      let offset = 0;
-      for (const chunk of chunks) {
-        samples.set(chunk, offset);
-        offset += chunk.length;
-      }
-      this.transcriber.enqueue(
-        samples,
-        { guildId: this.guild.id, userId, user, timestamp: new Date().toISOString() },
-        this.onTranscript,
-      );
     };
 
     stream.once("end", finish);
@@ -176,9 +170,11 @@ export class DiscordVoiceSession {
 
   stop(): void {
     this.stopped = true;
+    this.abort.abort();
     this.connection.receiver.speaking.off("start", this.onStart);
     this.interruptSpeech();
     for (const stream of this.active.values()) stream.destroy();
     this.active.clear();
+    this.inputs.clear();
   }
 }

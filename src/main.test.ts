@@ -39,7 +39,9 @@ import {
   validateProfileProposal,
   validateProposals,
 } from "./scripts/sleep.js";
-import { containsSpeech } from "./stt/vad.js";
+import { ParakeetTranscriber } from "./stt/parakeet.js";
+import type { Transcript } from "./stt/types.js";
+import { SpeechSegmenter } from "./stt/vad.js";
 import { currentDateTimeTool } from "./tools/datetime.js";
 import { createDiscordTools, safeImagePath } from "./tools/discord.js";
 import { createMemeSearchTool } from "./tools/memes.js";
@@ -126,24 +128,6 @@ test("stereo PCM is mixed to mono without changing duration", () => {
   assert.equal(mono.length, 2);
   assert.ok(Math.abs(mono.at(0) ?? Number.POSITIVE_INFINITY) < 0.0001);
   assert.equal(mono.at(1), 0.5);
-});
-
-test("VAD gates audio and resets between chunks", () => {
-  let empty = false;
-  let resets = 0;
-  const vad = {
-    acceptWaveform: (_samples: Float32Array) => undefined,
-    isEmpty: () => empty,
-    reset: () => {
-      resets += 1;
-    },
-    flush: () => undefined,
-  };
-
-  assert.equal(containsSpeech(vad, new Float32Array()), true);
-  empty = true;
-  assert.equal(containsSpeech(vad, new Float32Array()), false);
-  assert.equal(resets, 2);
 });
 
 test("wake word tolerates common STT variants as separate words", () => {
@@ -1324,4 +1308,92 @@ test("relative history dates respect Cyrillic boundaries and the configured time
     searchHistory([dstDay], { query: "вчера" }, new Date("2026-03-09T04:30:00Z"), "America/New_York").length,
     1,
   );
+});
+
+test("VAD drains speech before capture ends and discards cancelled input", () => {
+  const abort = new AbortController();
+  const segments: Float32Array[] = [];
+  const delivered: Float32Array[] = [];
+  let accepted = 0;
+  let resets = 0;
+  const vad = {
+    acceptWaveform: (samples: Float32Array) => {
+      assert.ok(samples.length <= 512);
+      accepted += samples.length;
+      if (accepted === 1024) segments.push(new Float32Array([1, 2, 3]));
+    },
+    isEmpty: () => !segments.length,
+    front: (external?: boolean) => {
+      assert.equal(external, false);
+      return { start: 0, samples: segments[0] ?? new Float32Array() };
+    },
+    pop: () => {
+      segments.shift();
+    },
+    reset: () => {
+      resets++;
+    },
+    flush: () => {
+      segments.push(new Float32Array([4]));
+    },
+  };
+  const input = new SpeechSegmenter(vad, (samples) => delivered.push(samples), abort.signal);
+  input.accept(new Float32Array(2048));
+  assert.deepEqual(
+    delivered.map((samples) => Array.from(samples)),
+    [[1, 2, 3]],
+  );
+  input.finish();
+  assert.deepEqual(
+    delivered.map((samples) => Array.from(samples)),
+    [[1, 2, 3], [4]],
+  );
+  abort.abort();
+  input.accept(new Float32Array(512));
+  input.finish();
+  assert.equal(accepted, 2048);
+  assert.equal(resets, 2);
+  assert.equal(delivered.length, 2);
+});
+
+test("STT skips cancelled queued work and suppresses results cancelled during decoding", async () => {
+  let decodes = 0;
+  let finish = (_result: { text: string }): void => undefined;
+  const recognizer = {
+    createStream: () => ({ acceptWaveform: () => undefined }),
+    decodeAsync: () => {
+      decodes++;
+      return new Promise<{ text: string }>((resolve) => {
+        finish = resolve;
+      });
+    },
+  };
+  // Exercise the queue independently of model files or inference speed.
+  const transcriber = Reflect.construct(ParakeetTranscriber, [recognizer, {}]) as {
+    enqueue(
+      samples: Float32Array,
+      meta: Omit<Transcript, "text">,
+      callback: (transcript: Transcript) => void,
+      signal: AbortSignal,
+    ): void;
+    queue: Promise<void>;
+  };
+  const abort = new AbortController();
+  let callbacks = 0;
+  const meta = { guildId: "g", userId: "1", user: "Илья", timestamp: new Date().toISOString() };
+  for (let i = 0; i < 2; i++)
+    transcriber.enqueue(
+      new Float32Array(512),
+      meta,
+      () => {
+        callbacks++;
+      },
+      abort.signal,
+    );
+  await new Promise((resolve) => setImmediate(resolve));
+  abort.abort();
+  finish({ text: "Олег, поздняя реплика." });
+  await transcriber.queue;
+  assert.equal(decodes, 1);
+  assert.equal(callbacks, 0);
 });

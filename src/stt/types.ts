@@ -6,6 +6,15 @@ export interface Transcript {
   text: string;
 }
 
+export interface SpeechInput {
+  accept(samples: Float32Array): void;
+  finish(): void;
+}
+
 export interface Transcriber {
-  enqueue(samples: Float32Array, meta: Omit<Transcript, "text">, onTranscript: (transcript: Transcript) => void): void;
+  createInput(
+    meta: Omit<Transcript, "text" | "timestamp">,
+    onTranscript: (transcript: Transcript) => void,
+    signal: AbortSignal,
+  ): SpeechInput;
 }

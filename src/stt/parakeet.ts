@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
-import type { OfflineRecognizer as OfflineRecognizerType, Vad as VadType } from "sherpa-onnx-node";
+import type { OfflineRecognizer as OfflineRecognizerType, VadConfig } from "sherpa-onnx-node";
 import sherpa from "sherpa-onnx-node";
 
 import { isFillerOnlyTranscript } from "../agent/transcript.js";
 import { errorMessage, log } from "../common.js";
-import type { Transcriber, Transcript } from "./types.js";
-import { containsSpeech } from "./vad.js";
+import type { SpeechInput, Transcriber, Transcript } from "./types.js";
+import { SpeechSegmenter } from "./vad.js";
 
 const { OfflineRecognizer, Vad } = sherpa;
 
@@ -17,7 +17,7 @@ export class ParakeetTranscriber implements Transcriber {
 
   private constructor(
     private readonly recognizer: OfflineRecognizerType,
-    private readonly vad: VadType,
+    private readonly vadConfig: VadConfig,
   ) {}
 
   static async create(
@@ -50,39 +50,56 @@ export class ParakeetTranscriber implements Transcriber {
       decodingMethod: "greedy_search",
       maxActivePaths: 4,
     });
-    const vad = new Vad(
-      {
-        sileroVad: {
-          model: vadModel,
-          threshold: vadThreshold,
-          minSilenceDuration: 0.5,
-          minSpeechDuration: 0.3,
-          windowSize: 512,
-          maxSpeechDuration: 30,
-        },
-        sampleRate: SAMPLE_RATE,
-        numThreads: 1,
-        provider: "cpu",
+    const vadConfig: VadConfig = {
+      sileroVad: {
+        model: vadModel,
+        threshold: vadThreshold,
+        minSilenceDuration: 0.5,
+        minSpeechDuration: 0.3,
+        windowSize: 512,
+        maxSpeechDuration: 20,
       },
-      60,
-    );
+      sampleRate: SAMPLE_RATE,
+      numThreads: 1,
+      provider: "cpu",
+    };
     log("info", "transcriber initialized", {
       provider: "cpu",
       model: "parakeet-tdt-0.6b-v3-int8",
       vad: "silero-v5",
       vad_threshold: vadThreshold,
     });
-    return new ParakeetTranscriber(recognizer, vad);
+    return new ParakeetTranscriber(recognizer, vadConfig);
   }
 
-  enqueue(samples: Float32Array, meta: Omit<Transcript, "text">, onTranscript: (transcript: Transcript) => void): void {
+  createInput(
+    meta: Omit<Transcript, "text" | "timestamp">,
+    onTranscript: (transcript: Transcript) => void,
+    signal: AbortSignal,
+  ): SpeechInput {
+    return new SpeechSegmenter(
+      new Vad(this.vadConfig, 30),
+      (samples) => {
+        this.enqueue(samples, { ...meta, timestamp: new Date().toISOString() }, onTranscript, signal);
+      },
+      signal,
+    );
+  }
+
+  private enqueue(
+    samples: Float32Array,
+    meta: Omit<Transcript, "text">,
+    onTranscript: (transcript: Transcript) => void,
+    signal: AbortSignal,
+  ): void {
     this.queue = this.queue
       .then(async () => {
-        if (!containsSpeech(this.vad, samples)) return;
+        if (signal.aborted) return;
         const started = performance.now();
         const stream = this.recognizer.createStream();
         stream.acceptWaveform({ samples, sampleRate: SAMPLE_RATE });
         const result = await this.recognizer.decodeAsync(stream);
+        if (signal.aborted) return;
         const text = result.text.trim();
         if (!text || isFillerOnlyTranscript(text)) return;
         log("info", "transcript", {
@@ -93,11 +110,6 @@ export class ParakeetTranscriber implements Transcriber {
         });
         onTranscript({ ...meta, text });
       })
-      .catch((error: unknown) =>
-        log("error", "transcription failed", {
-          user: meta.user,
-          error: errorMessage(error),
-        }),
-      );
+      .catch((error: unknown) => log("error", "transcription failed", { user: meta.user, error: errorMessage(error) }));
   }
 }

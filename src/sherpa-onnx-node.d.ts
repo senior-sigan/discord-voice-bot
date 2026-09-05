@@ -55,6 +55,8 @@ declare module "sherpa-onnx-node" {
     constructor(config: VadConfig, bufferSizeInSeconds: number);
     acceptWaveform(samples: Float32Array): void;
     isEmpty(): boolean;
+    front(enableExternalBuffer?: boolean): { start: number; samples: Float32Array };
+    pop(): void;
     reset(): void;
     flush(): void;
   }
