@@ -162,30 +162,37 @@ function historyText(entry: HistoryEntry): string {
   return `${entry.speaker} ${entry.text}`;
 }
 
-function localDateOffset(now: Date, days: number): string {
-  const date = new Date(now);
-  date.setDate(date.getDate() + days);
-  return formatMessageDate(date);
+function localDateOffset(now: Date, days: number, formatter: Intl.DateTimeFormat): string {
+  const date = new Date(`${formatter.format(now)}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 export function searchHistory(
   entries: HistoryEntry[],
   filters: HistorySearch,
   now = new Date(),
+  timezone = Intl.DateTimeFormat().resolvedOptions().timeZone,
 ): Array<{ entry: HistoryEntry; relevance: number }> {
   // ponytail: linear scan is enough for one Discord; move to SQLite FTS past ~100k entries.
+  const dateFormatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
   const rawQuery = filters.query?.trim() ?? "";
   const queryWords = normalizedWords(rawQuery);
-  const inferredDate = /\bсегодня\b/iu.test(rawQuery)
-    ? localDateOffset(now, 0)
-    : /\bвчера\b/iu.test(rawQuery)
-      ? localDateOffset(now, -1)
+  const inferredDate = /(?<![\p{L}\p{N}_])сегодня(?![\p{L}\p{N}_])/iu.test(rawQuery)
+    ? localDateOffset(now, 0, dateFormatter)
+    : /(?<![\p{L}\p{N}_])вчера(?![\p{L}\p{N}_])/iu.test(rawQuery)
+      ? localDateOffset(now, -1, dateFormatter)
       : undefined;
   const requestedDate =
     filters.date === "today"
-      ? localDateOffset(now, 0)
+      ? localDateOffset(now, 0, dateFormatter)
       : filters.date === "yesterday"
-        ? localDateOffset(now, -1)
+        ? localDateOffset(now, -1, dateFormatter)
         : (filters.date ?? inferredDate);
   const requestedKind =
     filters.kind ??
@@ -196,7 +203,7 @@ export function searchHistory(
   return entries
     .flatMap((entry) => {
       if (entry.kind === "auto_participation") return [];
-      if (requestedDate && entry.date !== requestedDate) return [];
+      if (requestedDate && dateFormatter.format(new Date(entry.timestamp)) !== requestedDate) return [];
       if (requestedKind && entry.kind !== requestedKind) return [];
       if (speaker && (entry.kind === "tool" || !entry.speaker.toLocaleLowerCase("ru-RU").includes(speaker))) return [];
       if (tool && (entry.kind !== "tool" || !entry.tool.toLocaleLowerCase("en-US").includes(tool))) return [];

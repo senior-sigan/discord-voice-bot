@@ -62,7 +62,7 @@ export function createRememberTool(memory: MemoryStore, history: HistoryStore): 
   };
 }
 
-export function createSearchMemoryTool(memory: MemoryStore): AgentTool<typeof searchParameters> {
+export function createSearchMemoryTool(memory: MemoryStore, timezone?: string): AgentTool<typeof searchParameters> {
   return {
     name: "search_memory",
     label: "Поиск в памяти",
@@ -80,6 +80,8 @@ export function createSearchMemoryTool(memory: MemoryStore): AgentTool<typeof se
           ...(args.date ? { date: args.date } : {}),
           limit: args.limit ?? 5,
         },
+        new Date(),
+        timezone,
       ).flatMap(({ entry }) => {
         const memoryEntry = memoryByProjection.get(entry);
         return memoryEntry ? [memoryEntry] : [];

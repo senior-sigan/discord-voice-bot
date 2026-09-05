@@ -17,7 +17,7 @@ const parameters = Type.Object(
   { additionalProperties: false },
 );
 
-export function createRecallHistoryTool(history: HistoryStore): AgentTool<typeof parameters> {
+export function createRecallHistoryTool(history: HistoryStore, timezone?: string): AgentTool<typeof parameters> {
   return {
     name: "recall_history",
     label: "Поиск по истории",
@@ -33,7 +33,7 @@ export function createRecallHistoryTool(history: HistoryStore): AgentTool<typeof
         ...(args.tool !== undefined ? { tool: args.tool } : {}),
         limit: args.limit ?? 10,
       };
-      const results = searchHistory(history.entries, filters).map(({ entry, relevance }) => ({
+      const results = searchHistory(history.entries, filters, new Date(), timezone).map(({ entry, relevance }) => ({
         ...entry,
         relevance: Number(relevance.toFixed(2)),
       }));

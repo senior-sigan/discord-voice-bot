@@ -1286,3 +1286,42 @@ test("curated memory requires user evidence, persists, and supports fuzzy search
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("relative history dates respect Cyrillic boundaries and the configured timezone", () => {
+  const entry = (timestamp: string): HistoryEntry => ({
+    kind: "transcript",
+    speaker: "Илья",
+    text: "Обсуждали игру",
+    timestamp,
+    date: timestamp.slice(0, 10),
+    time: "00:00:00",
+  });
+  const today = entry("2026-09-05T19:00:00Z"); // September 6 in Omsk
+  const yesterday = entry("2026-09-04T19:00:00Z");
+  const old = entry("2026-08-01T10:00:00Z");
+  const entries = [today, yesterday, old];
+  const now = new Date("2026-09-05T20:00:00Z");
+  for (const query of ["вчера", "Что обсуждали вчера?", "ВЧЕРА!"]) {
+    assert.deepEqual(
+      searchHistory(entries, { query }, now, "Asia/Omsk").map(({ entry }) => entry),
+      [yesterday],
+    );
+  }
+  assert.deepEqual(
+    searchHistory(entries, { query: "сегодня" }, now, "Asia/Omsk").map(({ entry }) => entry),
+    [today],
+  );
+  assert.deepEqual(
+    searchHistory(entries, { date: "yesterday" }, now, "Asia/Omsk").map(({ entry }) => entry),
+    [yesterday],
+  );
+  assert.deepEqual(
+    searchHistory(entries, { query: "вчера", date: "2026-08-01" }, now, "Asia/Omsk").map(({ entry }) => entry),
+    [old],
+  );
+  const dstDay = entry("2026-03-08T05:30:00Z");
+  assert.equal(
+    searchHistory([dstDay], { query: "вчера" }, new Date("2026-03-09T04:30:00Z"), "America/New_York").length,
+    1,
+  );
+});
