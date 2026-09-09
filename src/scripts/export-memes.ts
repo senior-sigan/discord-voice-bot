@@ -1,5 +1,17 @@
-import { appendFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
-import { extname, join } from "node:path";
+import {
+  appendFileSync,
+  closeSync,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, extname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import type {
@@ -19,6 +31,7 @@ import { dataPath, loadConfig } from "../config.js";
 const OUTPUT_DIR = dataPath("memes");
 const IMAGE_DIR = join(OUTPUT_DIR, "images");
 const INDEX_FILE = join(OUTPUT_DIR, "images.jsonl");
+const LOCK_FILE = join(OUTPUT_DIR, ".export.lock");
 const IMAGE_EXTENSIONS = new Set([".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);
 const MIME_EXTENSIONS: Record<string, string> = {
   "image/avif": ".avif",
@@ -51,7 +64,7 @@ interface SourceChannel {
   parent_id?: string | null;
 }
 
-interface ImageRecord {
+export interface ImageRecord {
   timestamp: string;
   user_id: string;
   username: string;
@@ -62,6 +75,13 @@ interface ImageRecord {
   original_filename: string;
   content_type: string | null;
   path: string;
+}
+
+export function sortMemeRecordsChronologically(records: readonly ImageRecord[]): ImageRecord[] {
+  return [...records].sort(
+    (left, right) =>
+      left.timestamp.localeCompare(right.timestamp) || left.attachment_id.localeCompare(right.attachment_id),
+  );
 }
 
 export function isImageAttachment(attachment: Pick<APIAttachment, "content_type" | "filename">): boolean {
@@ -83,6 +103,47 @@ export function imageFileName(
   return `${timestamp}__u-${message.author.id}__m-${message.id}__a-${attachment.id}${extension}`;
 }
 
+export function isDiscordForbidden(error: unknown): boolean {
+  return isRecord(error) && error["status"] === 403;
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return isRecord(error) && error["code"] === "EPERM";
+  }
+}
+
+export function acquireExportLock(path: string, pid = process.pid): () => void {
+  mkdirSync(dirname(path), { recursive: true });
+  for (;;) {
+    try {
+      const descriptor = openSync(path, "wx");
+      try {
+        writeFileSync(descriptor, `${pid}\n`);
+      } finally {
+        closeSync(descriptor);
+      }
+      return () => {
+        try {
+          unlinkSync(path);
+        } catch (error) {
+          if (!isRecord(error) || error["code"] !== "ENOENT") throw error;
+        }
+      };
+    } catch (error) {
+      if (!isRecord(error) || error["code"] !== "EEXIST") throw error;
+      const owner = Number(readFileSync(path, "utf8").trim());
+      if (Number.isSafeInteger(owner) && owner > 0 && processExists(owner)) {
+        throw new Error(`meme export is already running with PID ${owner}`);
+      }
+      unlinkSync(path);
+    }
+  }
+}
+
 function sourceChannel(channel: {
   id: string;
   type: ChannelType;
@@ -98,19 +159,45 @@ function sourceChannel(channel: {
   };
 }
 
-function existingRecords(): Map<string, ImageRecord> {
+function readRecords(path: string): Map<string, ImageRecord> {
   const records = new Map<string, ImageRecord>();
-  if (!existsSync(INDEX_FILE)) return records;
-  for (const [index, line] of readFileSync(INDEX_FILE, "utf8").split("\n").entries()) {
+  if (!existsSync(path)) return records;
+  for (const [index, line] of readFileSync(path, "utf8").split("\n").entries()) {
     if (!line) continue;
     try {
       const record = JSON.parse(line) as ImageRecord;
+      if (records.has(record.attachment_id)) {
+        throw new Error(`duplicate attachment_id ${record.attachment_id}`);
+      }
       records.set(record.attachment_id, record);
-    } catch {
-      throw new Error(`invalid JSON in ${INDEX_FILE}:${index + 1}`);
+    } catch (error) {
+      const detail = error instanceof Error ? `: ${error.message}` : "";
+      throw new Error(`invalid meme record in ${path}:${index + 1}${detail}`);
     }
   }
   return records;
+}
+
+function existingRecords(): Map<string, ImageRecord> {
+  return readRecords(INDEX_FILE);
+}
+
+export function sortMemeIndexFile(path = INDEX_FILE): void {
+  if (!existsSync(path)) return;
+  const records = [...readRecords(path).values()];
+  const temporaryPath = `${path}.${process.pid}.sort.tmp`;
+  try {
+    writeFileSync(
+      temporaryPath,
+      sortMemeRecordsChronologically(records)
+        .map((record) => JSON.stringify(record))
+        .join("\n") + (records.length ? "\n" : ""),
+    );
+    renameSync(temporaryPath, path);
+  } catch (error) {
+    rmSync(temporaryPath, { force: true });
+    throw error;
+  }
 }
 
 async function archivedThreads(rest: REST, parentId: string, type: "public" | "private"): Promise<APIChannel[]> {
@@ -130,7 +217,7 @@ async function archivedThreads(rest: REST, parentId: string, type: "public" | "p
 }
 
 async function download(url: string, path: string): Promise<void> {
-  const temporaryPath = `${path}.part`;
+  const temporaryPath = `${path}.${process.pid}.part`;
   rmSync(temporaryPath, { force: true });
   const response = await fetch(url);
   if (!response.ok || !response.body) throw new Error(`HTTP ${response.status} ${response.statusText}`);
@@ -199,7 +286,7 @@ async function exportChannel(
   }
 }
 
-async function main(): Promise<void> {
+async function exportMemes(): Promise<void> {
   const config = loadConfig();
   const token = config.discordToken;
   const guildId = config.settings.discord.guild_id;
@@ -231,9 +318,14 @@ async function main(): Promise<void> {
   }
 
   for (const parent of selectedParents.filter((channel) => THREAD_PARENT_TYPES.has(channel.type))) {
-    for (const thread of await archivedThreads(rest, parent.id, "public")) {
-      const source = sourceChannel(thread);
-      if (source) channels.set(source.id, source);
+    try {
+      for (const thread of await archivedThreads(rest, parent.id, "public")) {
+        const source = sourceChannel(thread);
+        if (source) channels.set(source.id, source);
+      }
+    } catch (error) {
+      if (!isDiscordForbidden(error)) throw error;
+      console.warn(`Skipping public archived threads in #${parent.name}: missing access`);
     }
     if (parent.type === ChannelType.GuildText) {
       try {
@@ -242,8 +334,8 @@ async function main(): Promise<void> {
           if (source) channels.set(source.id, source);
         }
       } catch (error) {
-        if (!isRecord(error) || error["status"] !== 403) throw error;
-        console.warn(`Skipping private archived threads in #${parent.name}: missing Manage Threads permission`);
+        if (!isDiscordForbidden(error)) throw error;
+        console.warn(`Skipping private archived threads in #${parent.name}: missing access`);
       }
     }
   }
@@ -253,14 +345,32 @@ async function main(): Promise<void> {
   appendFileSync(INDEX_FILE, "");
   const records = existingRecords();
   const total = { messages: 0, downloaded: 0, skipped: 0, failed: 0 };
+  let scannedChannels = 0;
   for (const channel of channels.values()) {
-    const result = await exportChannel(rest, channel, records);
-    for (const key of Object.keys(total) as Array<keyof typeof total>) total[key] += result[key];
+    try {
+      const result = await exportChannel(rest, channel, records);
+      scannedChannels++;
+      for (const key of Object.keys(total) as Array<keyof typeof total>) total[key] += result[key];
+    } catch (error) {
+      if (!isDiscordForbidden(error)) throw error;
+      console.warn(`Skipping #${channel.name} (${channel.id}): missing access`);
+    }
   }
+  if (!scannedChannels) throw new Error(`no accessible message channels${filter ? ` matching ${filter}` : ""}`);
+  sortMemeIndexFile();
   console.log(
-    `Done: channels=${channels.size} messages=${total.messages} downloaded=${total.downloaded} skipped=${total.skipped} failed=${total.failed}`,
+    `Done: channels=${scannedChannels} messages=${total.messages} downloaded=${total.downloaded} skipped=${total.skipped} failed=${total.failed}`,
   );
   if (total.failed) process.exitCode = 1;
+}
+
+async function main(): Promise<void> {
+  const releaseLock = acquireExportLock(LOCK_FILE);
+  try {
+    await exportMemes();
+  } finally {
+    releaseLock();
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

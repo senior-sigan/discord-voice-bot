@@ -6,7 +6,7 @@ import { errorMessage, formatMessageTime, isRecord, log } from "../common.js";
 
 export type MemoryKind = "person" | "topic" | "story" | "moment" | "activity" | "summary";
 
-export interface MemoryEntry {
+interface MemoryEntryBase {
   id: string;
   timestamp: string;
   date: string;
@@ -15,16 +15,25 @@ export interface MemoryEntry {
   speaker: string;
   evidence: string;
   source_timestamp: string;
-  kind?: MemoryKind;
-  origin?: "sleep";
-  subject_ids?: string[];
-  importance?: number;
-  evidence_refs?: MemoryEvidence[];
-  reflection_day?: string;
   title?: string;
   started_at?: string;
   ended_at?: string;
 }
+
+export interface UserMemoryEntry extends MemoryEntryBase {
+  origin: "user";
+}
+
+export interface ReflectionMemoryEntry extends MemoryEntryBase {
+  origin: "sleep";
+  kind: MemoryKind;
+  subject_ids: string[];
+  importance: number;
+  evidence_refs: MemoryEvidence[];
+  reflection_day: string;
+}
+
+export type MemoryEntry = UserMemoryEntry | ReflectionMemoryEntry;
 
 export interface MemoryEvidence {
   source_timestamp: string;
@@ -71,7 +80,8 @@ export class MemoryStore {
     );
     if (existing) return existing;
     const now = new Date();
-    const entry: MemoryEntry = {
+    const entry: UserMemoryEntry = {
+      origin: "user",
       id: randomUUID(),
       timestamp: now.toISOString(),
       date: localDate(now),
@@ -96,13 +106,12 @@ export class MemoryStore {
     const speaker = subjects.map((subject) => subject.name).join(", ");
     const existing = this.entries.find(
       (entry) =>
+        entry.origin === "sleep" &&
         normalized(entry.fact) === normalized(fact) &&
         entry.kind === input.kind &&
         (input.kind !== "activity" || (entry.started_at === input.started_at && entry.ended_at === input.ended_at)) &&
         (input.kind !== "summary" || entry.reflection_day === input.day) &&
-        (entry.subject_ids
-          ? [...entry.subject_ids].sort().join("\n") === subjectKey
-          : normalized(entry.speaker) === normalized(speaker)),
+        [...entry.subject_ids].sort().join("\n") === subjectKey,
     );
     if (existing) return existing;
     const now = new Date();
@@ -151,20 +160,17 @@ function isMemoryEntry(value: unknown): value is MemoryEntry {
     typeof value["speaker"] === "string" &&
     typeof value["evidence"] === "string" &&
     typeof value["source_timestamp"] === "string" &&
-    (value["kind"] === undefined ||
-      value["kind"] === "person" ||
-      value["kind"] === "topic" ||
-      value["kind"] === "story" ||
-      value["kind"] === "moment" ||
-      value["kind"] === "activity" ||
-      value["kind"] === "summary") &&
-    (value["origin"] === undefined || value["origin"] === "sleep") &&
-    (value["subject_ids"] === undefined ||
-      (Array.isArray(value["subject_ids"]) && value["subject_ids"].every((item) => typeof item === "string"))) &&
-    (value["importance"] === undefined || typeof value["importance"] === "number") &&
-    (value["evidence_refs"] === undefined ||
-      (Array.isArray(value["evidence_refs"]) && value["evidence_refs"].every(isMemoryEvidence))) &&
-    (value["reflection_day"] === undefined || typeof value["reflection_day"] === "string") &&
+    (value["origin"] === "user" ||
+      (value["origin"] === "sleep" &&
+        typeof value["kind"] === "string" &&
+        ["person", "topic", "story", "moment", "activity", "summary"].includes(value["kind"]) &&
+        Array.isArray(value["subject_ids"]) &&
+        value["subject_ids"].every((item) => typeof item === "string") &&
+        typeof value["importance"] === "number" &&
+        [3, 4, 5].includes(value["importance"]) &&
+        Array.isArray(value["evidence_refs"]) &&
+        value["evidence_refs"].every(isMemoryEvidence) &&
+        typeof value["reflection_day"] === "string")) &&
     (value["title"] === undefined || typeof value["title"] === "string") &&
     (value["started_at"] === undefined || typeof value["started_at"] === "string") &&
     (value["ended_at"] === undefined || typeof value["ended_at"] === "string")

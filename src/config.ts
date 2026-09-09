@@ -39,24 +39,17 @@ const settingsSchema = z.strictObject({
     }),
   }),
   stt: z.strictObject({
-    backend: z.enum(["disabled", "parakeet", "qwen"]).default("parakeet"),
+    backend: z.enum(["disabled", "parakeet", "qwen"]),
     model_dir: nonBlankString,
     vad_model: nonBlankString,
     vad_threshold: z.number().min(0).max(1),
     threads: positiveInteger,
-    qwen: z
-      .strictObject({
-        base_url: endpointUrl,
-        model: nonBlankString,
-        language: nonBlankString.nullable(),
-        timeout_ms: positiveInteger,
-      })
-      .default({
-        base_url: "http://127.0.0.1:8765/v1",
-        model: "Qwen/Qwen3-ASR-0.6B",
-        language: null,
-        timeout_ms: 30_000,
-      }),
+    qwen: z.strictObject({
+      base_url: endpointUrl,
+      model: nonBlankString,
+      language: nonBlankString.nullable(),
+      timeout_ms: positiveInteger,
+    }),
   }),
   tts: z.strictObject({
     backend: z.enum(["piper", "qwen", "supertonic"]),
@@ -80,14 +73,6 @@ const settingsSchema = z.strictObject({
       .refine(({ voices }) => new Set(voices).size === voices.length, {
         path: ["voices"],
         message: "Supertonic voices must be unique",
-      })
-      .default({
-        model_dir: "models/sherpa-onnx-supertonic-3-tts-int8-2026-05-11",
-        threads: 2,
-        voice: "F1",
-        voices: [...SUPERTONIC_VOICES],
-        speed: 1,
-        num_steps: 8,
       }),
     qwen: z
       .strictObject({
@@ -108,18 +93,16 @@ const settingsSchema = z.strictObject({
   }),
   agent: z
     .strictObject({
-      soul: soulNameSchema.default("oleg"),
-      souls: soulsSchema.default({ oleg: OLEG_SOUL }),
+      soul: soulNameSchema,
+      souls: soulsSchema,
       timezone: nonBlankString,
       filler_dir: nonBlankString,
-      wake_words: wakeWordsSchema.default(DEFAULT_WAKE_WORDS),
+      wake_words: wakeWordsSchema,
       wake_cooldown_ms: nonNegativeInteger,
       context_chars: positiveInteger.min(1_000),
-      greet_on_join: z.boolean().default(true),
-      follow_up_window_ms: nonNegativeInteger.default(30_000),
-      local_control: z
-        .strictObject({ enabled: z.boolean(), host: nonBlankString, port: positiveInteger.max(65_535) })
-        .default({ enabled: true, host: "127.0.0.1", port: 7_070 }),
+      greet_on_join: z.boolean(),
+      follow_up_window_ms: nonNegativeInteger,
+      local_control: z.strictObject({ enabled: z.boolean(), host: nonBlankString, port: positiveInteger.max(65_535) }),
       auto_participation: z.strictObject({
         mode: autoParticipationModeSchema,
         silence_ms: nonNegativeInteger,
@@ -353,8 +336,8 @@ export class AppConfig {
 export function loadConfig(): AppConfig {
   const discordToken = process.env["DISCORD_TOKEN"];
   if (!discordToken) throw new Error("DISCORD_TOKEN is required");
-  const openAiCompatibleApiKey = secret("OPENAI_COMPATIBLE_API_KEY", "LLM_API_KEY");
-  const memeLlmApiKey = secret("MEME_LLM_API_KEY", "LLM_API_KEY");
+  const openAiCompatibleApiKey = secret("OPENAI_COMPATIBLE_API_KEY");
+  const memeLlmApiKey = secret("MEME_LLM_API_KEY");
   const qwenSttApiKey = secret("MLX_ASR_API_KEY");
   const qwenAuthorization = qwenTtsAuthorization();
   return new AppConfig(process.env["DATA_DIR"]?.trim() || ".data", {
@@ -381,8 +364,8 @@ function deepMerge(base: unknown, override: unknown): unknown {
   return result;
 }
 
-function secret(primary: string, legacy?: string): string | undefined {
-  return process.env[primary]?.trim() || (legacy ? process.env[legacy]?.trim() : undefined);
+function secret(name: string): string | undefined {
+  return process.env[name]?.trim() || undefined;
 }
 
 function qwenTtsAuthorization(): string | undefined {

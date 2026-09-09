@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
@@ -34,8 +34,20 @@ import { DiscordBot, enteredVoiceChannel } from "./discord/bot.js";
 import { DiscordVoiceSession } from "./discord/voice-session.js";
 import { startLocalControlServer } from "./local-control.js";
 import { TaskScheduler } from "./scheduler.js";
-import { isRetryableLlmError, parseExplanation, resizeImageForLlm } from "./scripts/explain-memes.js";
-import { imageFileName, isImageAttachment } from "./scripts/export-memes.js";
+import {
+  isRetryableLlmError,
+  parseExplanation,
+  pendingAttachmentIds,
+  resizeImageForLlm,
+} from "./scripts/explain-memes.js";
+import {
+  acquireExportLock,
+  imageFileName,
+  isDiscordForbidden,
+  isImageAttachment,
+  sortMemeIndexFile,
+  sortMemeRecordsChronologically,
+} from "./scripts/export-memes.js";
 import {
   chunkTranscripts,
   hourlyChunks,
@@ -103,6 +115,13 @@ test("temporary LM Studio failures are retryable", () => {
   assert.equal(isRetryableLlmError(503, "unavailable"), true);
 });
 
+test("meme explanations resume by attachment id after the input is reordered", () => {
+  assert.deepEqual(pendingAttachmentIds(["old", "middle", "new"], ["new", "old"]), ["middle"]);
+  assert.throws(() => pendingAttachmentIds(["one", "one"], []), /duplicate attachment_id/u);
+  assert.throws(() => pendingAttachmentIds(["one"], ["missing"]), /missing from/u);
+  assert.throws(() => pendingAttachmentIds(["one"], ["one", "one"]), /duplicate attachment_id/u);
+});
+
 test("meme exporter recognizes images and creates stable filenames", () => {
   assert.equal(isImageAttachment({ content_type: "image/png", filename: "meme.bin" }), true);
   assert.equal(isImageAttachment({ filename: "meme.WEBP" }), true);
@@ -122,6 +141,64 @@ test("meme exporter recognizes images and creates stable filenames", () => {
     ),
     "20260825T120501_123Z__u-10__m-20__a-30.webp",
   );
+  assert.equal(isDiscordForbidden({ status: 403, code: 50_001 }), true);
+  assert.equal(isDiscordForbidden({ status: 403, code: 50_013 }), true);
+  assert.equal(isDiscordForbidden({ status: 404, code: 10_003 }), false);
+  assert.equal(isDiscordForbidden(new Error("Missing Access")), false);
+});
+
+test("meme exporter prevents concurrent runs and recovers a stale lock", () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-meme-lock-"));
+  const lock = join(directory, "export.lock");
+  try {
+    const release = acquireExportLock(lock);
+    assert.throws(() => acquireExportLock(lock), /already running/u);
+    release();
+
+    writeFileSync(lock, `${Number.MAX_SAFE_INTEGER}\n`);
+    const releaseRecovered = acquireExportLock(lock);
+    releaseRecovered();
+    assert.equal(existsSync(lock), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("meme index is sorted from oldest to newest with deterministic ties", () => {
+  const record = (timestamp: string, attachmentId: string) =>
+    ({ timestamp, attachment_id: attachmentId }) as Parameters<typeof sortMemeRecordsChronologically>[0][number];
+  const records = [
+    record("2026-01-02T00:00:00.000Z", "b"),
+    record("2025-12-31T00:00:00.000Z", "z"),
+    record("2026-01-02T00:00:00.000Z", "a"),
+  ];
+  assert.deepEqual(
+    sortMemeRecordsChronologically(records).map(({ attachment_id }) => attachment_id),
+    ["z", "a", "b"],
+  );
+});
+
+test("meme index file is rewritten chronologically and rejects duplicate ids", () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-meme-sort-"));
+  const path = join(directory, "images.jsonl");
+  try {
+    const later = { timestamp: "2026-01-02T00:00:00.000Z", attachment_id: "later" };
+    const earlier = { timestamp: "2026-01-01T00:00:00.000Z", attachment_id: "earlier" };
+    writeFileSync(path, `${JSON.stringify(later)}\n${JSON.stringify(earlier)}\n`);
+    sortMemeIndexFile(path);
+    assert.deepEqual(
+      readFileSync(path, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line).attachment_id),
+      ["earlier", "later"],
+    );
+
+    writeFileSync(path, `${JSON.stringify(earlier)}\n${JSON.stringify(earlier)}\n`);
+    assert.throws(() => sortMemeIndexFile(path), /duplicate attachment_id/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("stereo PCM is mixed to mono without changing duration", () => {
@@ -467,6 +544,55 @@ test("config creates visible defaults and persists validated overrides", () => {
     invalidSoul.defaults.agent.soul = "missing";
     writeFileSync(config.file, JSON.stringify(invalidSoul));
     assert.throws(() => new AppConfig(directory, { discordToken: "test" }), /Selected soul must exist in souls/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("config rejects incomplete settings instead of filling missing fields", () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-strict-config-"));
+  try {
+    const config = new AppConfig(directory, { discordToken: "test" });
+    const initial = readFileSync(config.file, "utf8");
+    for (const [section, key] of [
+      ["stt", "backend"],
+      ["stt", "qwen"],
+      ["tts", "supertonic"],
+      ["agent", "soul"],
+      ["agent", "souls"],
+      ["agent", "wake_words"],
+      ["agent", "greet_on_join"],
+      ["agent", "follow_up_window_ms"],
+      ["agent", "local_control"],
+    ] as const) {
+      const document = JSON.parse(initial) as { defaults: Record<string, Record<string, unknown>> };
+      const settings = document.defaults[section];
+      assert.ok(settings);
+      delete settings[key];
+      writeFileSync(config.file, JSON.stringify(document));
+      assert.throws(() => new AppConfig(directory, { discordToken: "test" }), /Invalid config/u, `${section}.${key}`);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("history recalls only confirmed speech and requires a playback field", () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-strict-history-"));
+  try {
+    const path = join(directory, "history.jsonl");
+    const store = new HistoryStore(path);
+    store.appendSpeech("Произнесено", "played");
+    store.appendSpeech("Перебито", "interrupted");
+    store.appendSpeech("Ошибка", "failed");
+    const confirmed = store.entries[0];
+    const unknown = { ...confirmed, text: "Неизвестно", playback: null };
+    const missing = { ...confirmed, text: "Без статуса", playback: undefined };
+    writeFileSync(path, [...store.entries, unknown, missing].map((entry) => JSON.stringify(entry)).join("\n"));
+    const reloaded = new HistoryStore(path);
+    assert.equal(reloaded.entries.length, 4);
+    assert.equal(searchHistory(reloaded.entries, { kind: "assistant" }).length, 1);
+    assert.equal(searchHistory(reloaded.entries, { kind: "assistant" })[0]?.entry, reloaded.entries[0]);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -949,8 +1075,8 @@ test("history survives restart and supports filtered fuzzy recall", async () => 
   const path = join(directory, "history.jsonl");
   try {
     const store = new HistoryStore(path);
-    store.appendMessage("transcript", "Илья", "Я рассказывал про новую подушку", new Date(2026, 7, 25, 10, 0, 0));
-    store.appendMessage("assistant", "Олег", "Подушка отличная, бери", new Date(2026, 7, 25, 10, 0, 5));
+    store.appendTranscript("Илья", "Я рассказывал про новую подушку", new Date(2026, 7, 25, 10, 0, 0));
+    store.appendSpeech("Подушка отличная, бери", "played", new Date(2026, 7, 25, 10, 0, 5));
     store.appendTool("web_search", { query: "подушки Омск" }, new Date(2026, 7, 25, 10, 0, 2));
     store.appendAutoParticipation(
       {
@@ -1255,11 +1381,20 @@ test("reflected memory persists metadata and deduplicates exact facts", () => {
 
     const reloaded = new MemoryStore(path);
     assert.equal(reloaded.entries.length, 3);
-    assert.equal(reloaded.entries[0]?.kind, "person");
-    assert.deepEqual(reloaded.entries[0]?.subject_ids, ["1"]);
+    assert.equal(reloaded.entries[0]?.origin, "sleep");
+    const first = reloaded.entries[0];
+    assert.ok(first?.origin === "sleep");
+    assert.equal(first.kind, "person");
+    assert.deepEqual(first.subject_ids, ["1"]);
     assert.equal(reloaded.entries[0]?.origin, "sleep");
     assert.equal(reloaded.entries[2]?.title, "Планировали поездку");
     assert.equal(reloaded.entries[2]?.started_at, evidence.source_timestamp);
+    for (const key of ["origin", "kind", "subject_ids", "importance", "evidence_refs", "reflection_day"]) {
+      const incomplete: Record<string, unknown> = { ...first };
+      delete incomplete[key];
+      writeFileSync(path, JSON.stringify(incomplete));
+      assert.equal(new MemoryStore(path).entries.length, 0, key);
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -1309,12 +1444,7 @@ test("curated memory requires user evidence, persists, and supports fuzzy search
   const memoryPath = join(directory, "memory.jsonl");
   try {
     const history = new HistoryStore(historyPath);
-    history.appendMessage(
-      "transcript",
-      "Илья",
-      "Олег, запомни: я люблю кофе без сахара",
-      new Date(2026, 7, 25, 12, 0, 0),
-    );
+    history.appendTranscript("Илья", "Олег, запомни: я люблю кофе без сахара", new Date(2026, 7, 25, 12, 0, 0));
     const memory = new MemoryStore(memoryPath);
     const remember = createRememberTool(memory, history);
     const saved = await remember.execute("remember-1", {
@@ -1337,7 +1467,7 @@ test("curated memory requires user evidence, persists, and supports fuzzy search
       }),
       /not found/iu,
     );
-    history.appendMessage("transcript", "Илья", "Я люблю чай", new Date(2026, 7, 25, 12, 1, 0));
+    history.appendTranscript("Илья", "Я люблю чай", new Date(2026, 7, 25, 12, 1, 0));
     await assert.rejects(
       remember.execute("remember-not-requested", {
         fact: "Илья любит чай",

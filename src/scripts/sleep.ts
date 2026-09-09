@@ -793,9 +793,8 @@ function memoryCandidates(
   return entries.flatMap((entry) => {
     if (
       entry.origin !== "sleep" ||
-      !entry.kind ||
-      !entry.subject_ids?.length ||
-      !entry.evidence_refs?.length ||
+      !entry.subject_ids.length ||
+      !entry.evidence_refs.length ||
       entry.reflection_day === "all"
     ) {
       return [];
@@ -810,9 +809,9 @@ function memoryCandidates(
         kind: entry.kind,
         fact: entry.fact,
         subjects,
-        importance: entry.importance ?? 4,
+        importance: entry.importance,
         evidence: entry.evidence_refs,
-        day: entry.reflection_day ?? entry.date,
+        day: entry.reflection_day,
         ...(entry.title ? { title: entry.title } : {}),
         ...(entry.started_at ? { started_at: entry.started_at } : {}),
         ...(entry.ended_at ? { ended_at: entry.ended_at } : {}),

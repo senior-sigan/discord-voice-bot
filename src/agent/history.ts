@@ -24,7 +24,7 @@ export interface TranscriptHistoryEntry extends MessageHistoryEntryBase {
 
 export interface AssistantHistoryEntry extends MessageHistoryEntryBase {
   kind: "assistant";
-  playback?: "played" | "interrupted" | "failed";
+  playback: "played" | "interrupted" | "failed" | null;
 }
 
 export interface VoiceMemberJoinedHistoryEntry extends MessageHistoryEntryBase {
@@ -97,7 +97,7 @@ function isHistoryEntry(value: unknown): value is HistoryEntry {
     typeof value["speaker"] === "string" &&
     typeof value["text"] === "string" &&
     (value["kind"] !== "assistant" ||
-      value["playback"] === undefined ||
+      value["playback"] === null ||
       value["playback"] === "played" ||
       value["playback"] === "interrupted" ||
       value["playback"] === "failed")
@@ -209,7 +209,7 @@ export function searchHistory(
   return entries
     .flatMap((entry) => {
       if (entry.kind === "auto_participation") return [];
-      if (entry.kind === "assistant" && entry.playback && entry.playback !== "played") return [];
+      if (entry.kind === "assistant" && entry.playback !== "played") return [];
       if (requestedDate && dateFormatter.format(new Date(entry.timestamp)) !== requestedDate) return [];
       if (requestedKind && entry.kind !== requestedKind) return [];
       if (speaker && (entry.kind === "tool" || !entry.speaker.toLocaleLowerCase("ru-RU").includes(speaker))) return [];
@@ -249,13 +249,7 @@ export class HistoryStore {
     log("info", "history loaded", { file: path, entries: this.entries.length });
   }
 
-  appendMessage(
-    kind: "transcript" | "assistant",
-    speaker: string,
-    text: string,
-    at = new Date(),
-    speakerId?: string,
-  ): void {
+  appendTranscript(speaker: string, text: string, at = new Date(), speakerId?: string): void {
     const entry = {
       timestamp: at.toISOString(),
       date: formatMessageDate(at),
@@ -264,11 +258,10 @@ export class HistoryStore {
       ...(speakerId ? { speaker_id: speakerId } : {}),
       text,
     };
-    this.append(kind === "transcript" ? { ...entry, kind: "transcript" } : { ...entry, kind: "assistant" });
+    this.append({ ...entry, kind: "transcript" });
   }
 
-  appendSpeech(text: string, playback: "played" | "interrupted" | "failed"): void {
-    const at = new Date();
+  appendSpeech(text: string, playback: "played" | "interrupted" | "failed", at = new Date()): void {
     this.append({
       kind: "assistant",
       speaker: "Олег",

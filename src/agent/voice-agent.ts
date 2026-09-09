@@ -63,13 +63,7 @@ export class VoiceAgent {
   }
 
   onTranscript(transcript: Transcript): void {
-    this.history.appendMessage(
-      "transcript",
-      transcript.user,
-      transcript.text,
-      new Date(transcript.timestamp),
-      transcript.userId,
-    );
+    this.history.appendTranscript(transcript.user, transcript.text, new Date(transcript.timestamp), transcript.userId);
     const version = (this.conversationVersions.get(transcript.guildId) ?? 0) + 1;
     this.conversationVersions.set(transcript.guildId, version);
     this.cancelAutoParticipationTimer(transcript.guildId);
@@ -210,7 +204,7 @@ export class VoiceAgent {
     for (const entry of history.toReversed()) {
       if (Date.parse(entry.timestamp) < since) break;
       if (entry.kind === "auto_participation") continue;
-      if (entry.kind === "assistant" && entry.playback && entry.playback !== "played") continue;
+      if (entry.kind === "assistant" && entry.playback !== "played") continue;
       const timestamp = formatVoiceContextTime(new Date(entry.timestamp), timezone);
       const line =
         entry.kind === "tool"

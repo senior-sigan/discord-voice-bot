@@ -235,21 +235,32 @@ async function explain(
   throw new Error("unreachable");
 }
 
-function completedPrefix(input: Array<{ raw: string; record: MemeRecord }>): number {
-  if (!existsSync(OUTPUT_FILE)) return 0;
+export function pendingAttachmentIds(inputIds: readonly string[], completedIds: readonly string[]): string[] {
+  const input = new Set(inputIds);
+  if (input.size !== inputIds.length) throw new Error(`${INPUT_FILE} has duplicate attachment_id values`);
+  const completed = new Set<string>();
+  for (const id of completedIds) {
+    if (!input.has(id)) throw new Error(`${OUTPUT_FILE} contains attachment_id missing from ${INPUT_FILE}: ${id}`);
+    if (completed.has(id)) throw new Error(`${OUTPUT_FILE} has duplicate attachment_id: ${id}`);
+    completed.add(id);
+  }
+  return inputIds.filter((id) => !completed.has(id));
+}
+
+function completedAttachmentIds(input: Array<{ raw: string; record: MemeRecord }>): Set<string> {
+  if (!existsSync(OUTPUT_FILE)) return new Set();
   const lines = readFileSync(OUTPUT_FILE, "utf8")
     .split("\n")
     .filter((line) => line.trim());
-  if (lines.length > input.length) throw new Error(`${OUTPUT_FILE} has more rows than ${INPUT_FILE}`);
+  const outputIds: string[] = [];
   for (const [index, line] of lines.entries()) {
     const output = parseRecord(line, `${OUTPUT_FILE}:${index + 1}`);
     parseExplanation(output);
-    const source = input[index];
-    if (!source || output.attachment_id !== source.record.attachment_id) {
-      throw new Error(`${OUTPUT_FILE}:${index + 1} does not match ${INPUT_FILE}`);
-    }
+    outputIds.push(output.attachment_id);
   }
-  return lines.length;
+  const inputIds = input.map(({ record }) => record.attachment_id);
+  pendingAttachmentIds(inputIds, outputIds);
+  return new Set(outputIds);
 }
 
 async function main(): Promise<void> {
@@ -262,15 +273,14 @@ async function main(): Promise<void> {
   const input = readFileSync(INPUT_FILE, "utf8")
     .split("\n")
     .flatMap((raw, index) => (raw.trim() ? [{ raw, record: parseRecord(raw, `${INPUT_FILE}:${index + 1}`) }] : []));
-  const completed = completedPrefix(input);
+  const completed = completedAttachmentIds(input);
   const rawLimit = process.argv[2];
   const limit = rawLimit === undefined ? input.length : Number(rawLimit);
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("optional limit must be a positive integer");
-  const end = Math.min(input.length, completed + limit);
+  const pending = input.filter(({ record }) => !completed.has(record.attachment_id));
 
-  for (const [offset, item] of input.slice(completed, end).entries()) {
-    const index = completed + offset;
-    console.log(`[${index + 1}/${input.length}]`);
+  for (const [offset, item] of pending.slice(0, limit).entries()) {
+    console.log(`[${completed.size + offset + 1}/${input.length}]`);
     console.log(item.raw);
     const explanation = await explain(item.record, options);
     console.log(JSON.stringify(explanation));
