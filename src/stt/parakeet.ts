@@ -4,12 +4,10 @@ import sherpa from "sherpa-onnx-node";
 
 import { isFillerOnlyTranscript } from "../agent/transcript.js";
 import { errorMessage, log } from "../common.js";
-import type { SpeechInput, Transcriber, Transcript } from "./types.js";
-import { SpeechSegmenter } from "./vad.js";
+import { SAMPLE_RATE, type SpeechInput, type Transcriber, type Transcript } from "./types.js";
+import { createVadConfig, SpeechSegmenter } from "./vad.js";
 
 const { OfflineRecognizer, Vad } = sherpa;
-
-export const SAMPLE_RATE = 16_000;
 
 export class ParakeetTranscriber implements Transcriber {
   // ponytail: one queue avoids native decoder contention; add a small worker pool if STT latency reaches audio duration.
@@ -31,8 +29,6 @@ export class ParakeetTranscriber implements Transcriber {
       const path = `${modelDir}/${file}`;
       if (!existsSync(path)) throw new Error(`Parakeet model file not found: ${path}`);
     }
-    if (!existsSync(vadModel)) throw new Error(`VAD model file not found: ${vadModel}`);
-
     log("info", "loading Parakeet", { model_dir: modelDir });
     const recognizer = await OfflineRecognizer.createAsync({
       featConfig: { sampleRate: SAMPLE_RATE, featureDim: 80 },
@@ -50,19 +46,7 @@ export class ParakeetTranscriber implements Transcriber {
       decodingMethod: "greedy_search",
       maxActivePaths: 4,
     });
-    const vadConfig: VadConfig = {
-      sileroVad: {
-        model: vadModel,
-        threshold: vadThreshold,
-        minSilenceDuration: 0.5,
-        minSpeechDuration: 0.3,
-        windowSize: 512,
-        maxSpeechDuration: 20,
-      },
-      sampleRate: SAMPLE_RATE,
-      numThreads: 1,
-      provider: "cpu",
-    };
+    const vadConfig = createVadConfig(vadModel, vadThreshold);
     log("info", "transcriber initialized", {
       provider: "cpu",
       model: "parakeet-tdt-0.6b-v3-int8",

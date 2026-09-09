@@ -6,6 +6,7 @@ recordings/
 references/
 ./voice-agents
 .env
+mise.local.toml
 
 assets/
 qwen-tts/

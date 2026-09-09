@@ -1,3 +1,5 @@
+export const SAMPLE_RATE = 16_000;
+
 export interface Transcript {
   guildId: string;
   userId: string;
@@ -12,6 +14,7 @@ export interface SpeechInput {
 }
 
 export interface Transcriber {
+  readonly enabled?: boolean;
   createInput(
     meta: Omit<Transcript, "text" | "timestamp">,
     onTranscript: (transcript: Transcript) => void,

@@ -23,6 +23,25 @@ description = "Process all conversation history into memories and profiles"
 depends = ["install"]
 run = "npm run sleep -- all"
 
+[tasks."stt:qwen"]
+description = "Start the local Qwen3-ASR MLX HTTP server"
+quiet = true
+tools = { python = "3.12", uv = "latest" }
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+: "${MLX_ASR_API_KEY:?Set MLX_ASR_API_KEY in mise.local.toml}"
+export UV_OFFLINE=0
+exec uvx --python 3.12 --from 'mlx-qwen3-asr[serve]==0.4.0' mlx-qwen3-asr serve \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --model Qwen/Qwen3-ASR-0.6B
+'''
+
+[tasks."stt:qwen:health"]
+description = "Check the local Qwen3-ASR HTTP server"
+run = "curl --silent --show-error --fail-with-body http://127.0.0.1:8765/health"
+
 [tasks.default]
 description = "Start the bot with voice-channel auto-join"
 depends = ["start"]

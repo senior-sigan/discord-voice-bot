@@ -13,7 +13,7 @@ import {
   parseAutoParticipationVerdict,
 } from "./auto-participation.js";
 import type { HistoryStore } from "./history.js";
-import { SYSTEM_PROMPT } from "./prompts.js";
+import { buildSystemPrompt } from "./prompts.js";
 import type { SkillStore } from "./skills.js";
 
 export type ToolCallListener = (name: string, args: string, announcement: string | undefined) => void;
@@ -197,7 +197,8 @@ export class AgentRuntime {
 
   private systemPrompt(): string {
     const catalog = this.skills.catalogPrompt();
-    return catalog ? `${SYSTEM_PROMPT}\n\n${catalog}` : SYSTEM_PROMPT;
+    const systemPrompt = buildSystemPrompt(this.config.agentSoul);
+    return catalog ? `${systemPrompt}\n\n${catalog}` : systemPrompt;
   }
 
   private handleEvent(event: AgentEvent): void {

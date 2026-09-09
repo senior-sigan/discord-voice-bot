@@ -50,7 +50,7 @@ export class DiscordVoiceSession {
       }),
     );
     this.onStart = (userId) => this.capture(userId);
-    connection.receiver.speaking.on("start", this.onStart);
+    if (transcriber.enabled !== false) connection.receiver.speaking.on("start", this.onStart);
   }
 
   private capture(userId: string): void {

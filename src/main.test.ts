@@ -22,6 +22,7 @@ import { autoParticipationCommand, parseAutoParticipationVerdict } from "./agent
 import { type HistoryEntry, HistoryStore, searchHistory } from "./agent/history.js";
 import { MemoryStore } from "./agent/memory.js";
 import { ProfileStore } from "./agent/profiles.js";
+import { buildSystemPrompt, OLEG_SOUL } from "./agent/prompts.js";
 import { AgentRuntime } from "./agent/runtime.js";
 import { SkillStore } from "./agent/skills.js";
 import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/transcript.js";
@@ -43,7 +44,9 @@ import {
   validateProfileProposal,
   validateProposals,
 } from "./scripts/sleep.js";
+import { createTranscriber } from "./stt/index.js";
 import { ParakeetTranscriber } from "./stt/parakeet.js";
+import { QwenHttpTranscriber } from "./stt/qwen-http.js";
 import type { Transcriber, Transcript } from "./stt/types.js";
 import { SpeechSegmenter } from "./stt/vad.js";
 import { currentDateTimeTool } from "./tools/datetime.js";
@@ -388,7 +391,8 @@ test("config creates visible defaults and persists validated overrides", () => {
     const config = new AppConfig(directory, { discordToken: "test" });
     const initial = JSON.parse(readFileSync(config.file, "utf8")) as {
       defaults: {
-        agent: { filler_dir: string };
+        agent: { filler_dir: string; soul: string; souls: Record<string, string> };
+        stt: { backend: "disabled" | "parakeet" | "qwen"; qwen: { base_url: string; language: string | null } };
         tts: {
           backend: "piper" | "qwen" | "supertonic";
           qwen: { base_url: string };
@@ -399,6 +403,10 @@ test("config creates visible defaults and persists validated overrides", () => {
     };
     assert.ok(initial.defaults);
     assert.deepEqual(initial.overrides, {});
+    assert.equal(initial.defaults.agent.soul, "oleg");
+    assert.deepEqual(initial.defaults.agent.souls, { oleg: OLEG_SOUL });
+    assert.match(buildSystemPrompt("  Спокойный собеседник.  "), /^Спокойный собеседник\./u);
+    assert.match(buildSystemPrompt("Спокойный собеседник."), /голосовой интерфейс/u);
     assert.equal(config.settings.agent.greet_on_join, true);
     assert.equal(config.settings.agent.follow_up_window_ms, 30_000);
     assert.deepEqual(config.settings.agent.local_control, { enabled: true, host: "127.0.0.1", port: 7_070 });
@@ -408,6 +416,13 @@ test("config creates visible defaults and persists validated overrides", () => {
       check_interval_ms: 5_000,
       cooldown_ms: 30_000,
       context_ms: 300_000,
+    });
+    assert.equal(initial.defaults.stt.backend, "parakeet");
+    assert.deepEqual(initial.defaults.stt.qwen, {
+      base_url: "http://127.0.0.1:8765/v1",
+      model: "Qwen/Qwen3-ASR-0.6B",
+      language: null,
+      timeout_ms: 30_000,
     });
     assert.equal(config.settings.tts.supertonic.voice, "F1");
 
@@ -437,10 +452,21 @@ test("config creates visible defaults and persists validated overrides", () => {
       join(directory, "fillers", "supertonic", encodeURIComponent(initial.defaults.tts.supertonic.model_dir), "M5"),
     );
 
+    const customSoul = structuredClone(qwenDocument);
+    customSoul.defaults.agent.souls["спокойный"] = "Спокойный и сдержанный собеседник.";
+    customSoul.defaults.agent.soul = "спокойный";
+    writeFileSync(config.file, JSON.stringify(customSoul));
+    assert.equal(new AppConfig(directory, { discordToken: "test" }).agentSoul, "Спокойный и сдержанный собеседник.");
+
     const invalid = structuredClone(qwenDocument);
     invalid.defaults.tts.qwen.base_url = "https://user:password@tts.example";
     writeFileSync(config.file, JSON.stringify(invalid));
     assert.throws(() => new AppConfig(directory, { discordToken: "test" }), /credentials/u);
+
+    const invalidSoul = structuredClone(qwenDocument);
+    invalidSoul.defaults.agent.soul = "missing";
+    writeFileSync(config.file, JSON.stringify(invalidSoul));
+    assert.throws(() => new AppConfig(directory, { discordToken: "test" }), /Selected soul must exist in souls/u);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -1671,6 +1697,119 @@ test("STT skips cancelled queued work and suppresses results cancelled during de
   await transcriber.queue;
   assert.equal(decodes, 1);
   assert.equal(callbacks, 0);
+});
+
+test("Qwen STT sends OpenAI-compatible WAV requests and suppresses cancelled work", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-qwen-stt-"));
+  const vadModel = join(directory, "silero.onnx");
+  writeFileSync(vadModel, "test");
+  const previousFetch = globalThis.fetch;
+  const requests: string[] = [];
+  try {
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      requests.push(url);
+      assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer local-secret");
+      if (url.endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "Qwen/Qwen3-ASR-0.6B" }] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      assert.equal(url, "http://127.0.0.1:8765/v1/audio/transcriptions");
+      assert.equal(init?.method, "POST");
+      assert.ok(init?.body instanceof FormData);
+      assert.equal(init.body.get("audio"), null);
+      assert.equal(init.body.get("model"), "Qwen/Qwen3-ASR-0.6B");
+      assert.equal(init.body.get("language"), "ru");
+      const file = init.body.get("file");
+      assert.ok(file instanceof Blob);
+      const wav = Buffer.from(await file.arrayBuffer());
+      assert.equal(wav.toString("ascii", 0, 4), "RIFF");
+      assert.equal(wav.toString("ascii", 8, 12), "WAVE");
+      assert.equal(wav.readUInt16LE(22), 1);
+      assert.equal(wav.readUInt32LE(24), 16_000);
+      assert.equal(wav.readUInt16LE(34), 16);
+      assert.equal(wav.readUInt32LE(40), 6);
+      return new Response(JSON.stringify({ text: "  Олег, проверка связи.  " }), {
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const transcriber = (await QwenHttpTranscriber.create(
+      "http://127.0.0.1:8765/v1/",
+      "Qwen/Qwen3-ASR-0.6B",
+      "ru",
+      10_000,
+      "local-secret",
+      vadModel,
+      0.6,
+    )) as unknown as {
+      enqueue(
+        samples: Float32Array,
+        meta: Omit<Transcript, "text">,
+        callback: (transcript: Transcript) => void,
+        signal: AbortSignal,
+      ): void;
+      queue: Promise<void>;
+    };
+    const transcripts: Transcript[] = [];
+    const meta = { guildId: "g", userId: "1", user: "Илья", timestamp: new Date().toISOString() };
+    transcriber.enqueue(
+      new Float32Array([0, 0.5, -0.5]),
+      meta,
+      (transcript) => transcripts.push(transcript),
+      new AbortController().signal,
+    );
+    await transcriber.queue;
+    assert.equal(transcripts[0]?.text, "Олег, проверка связи.");
+
+    const cancelled = new AbortController();
+    cancelled.abort();
+    transcriber.enqueue(new Float32Array(3), meta, (transcript) => transcripts.push(transcript), cancelled.signal);
+    await transcriber.queue;
+    assert.equal(requests.length, 2);
+    assert.equal(transcripts.length, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("disabled STT needs no models or server and does not subscribe to Discord speech", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-disabled-stt-"));
+  try {
+    const initial = new AppConfig(directory, { discordToken: "test" });
+    const document = JSON.parse(readFileSync(initial.file, "utf8")) as {
+      defaults: { stt: { backend: string; model_dir: string; vad_model: string } };
+    };
+    document.defaults.stt.backend = "disabled";
+    document.defaults.stt.model_dir = join(directory, "missing-parakeet");
+    document.defaults.stt.vad_model = join(directory, "missing-silero.onnx");
+    writeFileSync(initial.file, JSON.stringify(document));
+    const transcriber = await createTranscriber(new AppConfig(directory, { discordToken: "test" }));
+    const speaking = new EventEmitter();
+    const connection = {
+      subscribe: () => ({}),
+      receiver: {
+        speaking,
+        subscribe: () => {
+          throw new Error("disabled STT must not capture audio");
+        },
+      },
+    } as unknown as ConstructorParameters<typeof DiscordVoiceSession>[0];
+    const guild = { id: "g", members: { cache: new Map() } } as unknown as ConstructorParameters<
+      typeof DiscordVoiceSession
+    >[1];
+    const session = new DiscordVoiceSession(connection, guild, transcriber, "bot", () => {
+      throw new Error("disabled STT must not produce transcripts");
+    });
+
+    assert.equal(speaking.listenerCount("start"), 0);
+    speaking.emit("start", "1");
+    session.stop();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("Discord session drops capture callbacks after stop and cancels broken playback", async () => {

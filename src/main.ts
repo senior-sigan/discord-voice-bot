@@ -12,7 +12,7 @@ import { loadConfig } from "./config.js";
 import { DiscordBot } from "./discord/bot.js";
 import { startLocalControlServer } from "./local-control.js";
 import { TaskScheduler } from "./scheduler.js";
-import { ParakeetTranscriber } from "./stt/index.js";
+import { createTranscriber } from "./stt/index.js";
 import { createTools } from "./tools/index.js";
 import { createTts, loadFillers } from "./tts/index.js";
 
@@ -25,8 +25,7 @@ async function run(): Promise<void> {
   await skills.load();
   const ai = await createAiRuntime(config, process.argv.includes("--select-model"));
   const tts = await createTts(config);
-  const { stt } = config.settings;
-  const transcriber = await ParakeetTranscriber.create(stt.model_dir, stt.vad_model, stt.vad_threshold, stt.threads);
+  const transcriber = await createTranscriber(config);
   const guildId = config.settings.discord.guild_id;
   if (!guildId) throw new Error("Set defaults.discord.guild_id in config.json");
   const discord = new DiscordBot(config.discordToken, guildId, transcriber);

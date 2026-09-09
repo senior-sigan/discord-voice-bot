@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 
 import { z } from "zod";
 
+import { OLEG_SOUL } from "./agent/prompts.js";
 import { isRecord, log } from "./common.js";
 import { SUPERTONIC_VOICES } from "./tts/types.js";
 
@@ -17,6 +18,8 @@ const wakeWordsSchema = z
   });
 const qwenVoiceSchema = nonBlankString.regex(/^[a-z0-9_-]+$/iu);
 const supertonicVoiceSchema = z.enum(SUPERTONIC_VOICES);
+const soulNameSchema = nonBlankString.regex(/^[\p{L}\p{N}][\p{L}\p{N}_.-]*$/u);
+const soulsSchema = z.record(soulNameSchema, nonBlankString);
 const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
 const endpointUrl = z.url().refine((value) => {
@@ -36,10 +39,24 @@ const settingsSchema = z.strictObject({
     }),
   }),
   stt: z.strictObject({
+    backend: z.enum(["disabled", "parakeet", "qwen"]).default("parakeet"),
     model_dir: nonBlankString,
     vad_model: nonBlankString,
     vad_threshold: z.number().min(0).max(1),
     threads: positiveInteger,
+    qwen: z
+      .strictObject({
+        base_url: endpointUrl,
+        model: nonBlankString,
+        language: nonBlankString.nullable(),
+        timeout_ms: positiveInteger,
+      })
+      .default({
+        base_url: "http://127.0.0.1:8765/v1",
+        model: "Qwen/Qwen3-ASR-0.6B",
+        language: null,
+        timeout_ms: 30_000,
+      }),
   }),
   tts: z.strictObject({
     backend: z.enum(["piper", "qwen", "supertonic"]),
@@ -89,25 +106,32 @@ const settingsSchema = z.strictObject({
         message: "Qwen voices must be unique",
       }),
   }),
-  agent: z.strictObject({
-    timezone: nonBlankString,
-    filler_dir: nonBlankString,
-    wake_words: wakeWordsSchema.default(DEFAULT_WAKE_WORDS),
-    wake_cooldown_ms: nonNegativeInteger,
-    context_chars: positiveInteger.min(1_000),
-    greet_on_join: z.boolean().default(true),
-    follow_up_window_ms: nonNegativeInteger.default(30_000),
-    local_control: z
-      .strictObject({ enabled: z.boolean(), host: nonBlankString, port: positiveInteger.max(65_535) })
-      .default({ enabled: true, host: "127.0.0.1", port: 7_070 }),
-    auto_participation: z.strictObject({
-      mode: autoParticipationModeSchema,
-      silence_ms: nonNegativeInteger,
-      check_interval_ms: nonNegativeInteger,
-      cooldown_ms: nonNegativeInteger,
-      context_ms: positiveInteger,
+  agent: z
+    .strictObject({
+      soul: soulNameSchema.default("oleg"),
+      souls: soulsSchema.default({ oleg: OLEG_SOUL }),
+      timezone: nonBlankString,
+      filler_dir: nonBlankString,
+      wake_words: wakeWordsSchema.default(DEFAULT_WAKE_WORDS),
+      wake_cooldown_ms: nonNegativeInteger,
+      context_chars: positiveInteger.min(1_000),
+      greet_on_join: z.boolean().default(true),
+      follow_up_window_ms: nonNegativeInteger.default(30_000),
+      local_control: z
+        .strictObject({ enabled: z.boolean(), host: nonBlankString, port: positiveInteger.max(65_535) })
+        .default({ enabled: true, host: "127.0.0.1", port: 7_070 }),
+      auto_participation: z.strictObject({
+        mode: autoParticipationModeSchema,
+        silence_ms: nonNegativeInteger,
+        check_interval_ms: nonNegativeInteger,
+        cooldown_ms: nonNegativeInteger,
+        context_ms: positiveInteger,
+      }),
+    })
+    .refine(({ soul, souls }) => souls[soul] !== undefined, {
+      path: ["soul"],
+      message: "Selected soul must exist in souls",
     }),
-  }),
   sleep: z.strictObject({
     max_tokens: positiveInteger.min(1_024),
     chunk_chars: positiveInteger.min(1_000),
@@ -144,10 +168,17 @@ const INITIAL_DEFAULTS: RuntimeSettings = {
     },
   },
   stt: {
+    backend: "parakeet",
     model_dir: "models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
     vad_model: "models/vad/silero_vad_v5.onnx",
     vad_threshold: 0.6,
     threads: 2,
+    qwen: {
+      base_url: "http://127.0.0.1:8765/v1",
+      model: "Qwen/Qwen3-ASR-0.6B",
+      language: null,
+      timeout_ms: 30_000,
+    },
   },
   tts: {
     backend: "piper",
@@ -172,6 +203,8 @@ const INITIAL_DEFAULTS: RuntimeSettings = {
     },
   },
   agent: {
+    soul: "oleg",
+    souls: { oleg: OLEG_SOUL },
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     filler_dir: "assets/fillers",
     wake_words: DEFAULT_WAKE_WORDS,
@@ -199,6 +232,7 @@ export interface AppSecrets {
   discordToken: string;
   openAiCompatibleApiKey?: string;
   memeLlmApiKey?: string;
+  qwenSttApiKey?: string;
   qwenTtsAuthorization?: string;
 }
 
@@ -207,6 +241,7 @@ export class AppConfig {
   readonly discordToken: string;
   readonly openAiCompatibleApiKey: string | undefined;
   readonly memeLlmApiKey: string | undefined;
+  readonly qwenSttApiKey: string | undefined;
   readonly qwenTtsAuthorization: string | undefined;
   private document: ConfigDocument;
   private effectiveSettings: RuntimeSettings;
@@ -219,6 +254,7 @@ export class AppConfig {
     this.discordToken = secrets.discordToken;
     this.openAiCompatibleApiKey = secrets.openAiCompatibleApiKey;
     this.memeLlmApiKey = secrets.memeLlmApiKey;
+    this.qwenSttApiKey = secrets.qwenSttApiKey;
     this.qwenTtsAuthorization = secrets.qwenTtsAuthorization;
     if (!existsSync(this.file)) this.saveDocument({ defaults: INITIAL_DEFAULTS, overrides: {} });
     this.document = this.readDocument();
@@ -226,6 +262,7 @@ export class AppConfig {
     log("info", "config loaded", {
       file: this.file,
       model: this.effectiveSettings.ai.model,
+      stt_backend: this.effectiveSettings.stt.backend,
       tts_backend: this.effectiveSettings.tts.backend,
       tts_voice:
         this.effectiveSettings.tts.backend === "qwen"
@@ -234,6 +271,7 @@ export class AppConfig {
             ? this.effectiveSettings.tts.supertonic.voice
             : "ru_RU-ruslan-medium",
       auto_participation: this.effectiveSettings.agent.auto_participation.mode,
+      soul: this.effectiveSettings.agent.soul,
       greet_on_join: this.effectiveSettings.agent.greet_on_join,
       follow_up_window_ms: this.effectiveSettings.agent.follow_up_window_ms,
     });
@@ -241,6 +279,13 @@ export class AppConfig {
 
   get settings(): RuntimeSettings {
     return this.effectiveSettings;
+  }
+
+  get agentSoul(): string {
+    const { soul, souls } = this.effectiveSettings.agent;
+    const selected = souls[soul];
+    if (!selected) throw new Error(`Configured soul '${soul}' is unavailable`);
+    return selected;
   }
 
   get aiAuthFile(): string {
@@ -310,11 +355,13 @@ export function loadConfig(): AppConfig {
   if (!discordToken) throw new Error("DISCORD_TOKEN is required");
   const openAiCompatibleApiKey = secret("OPENAI_COMPATIBLE_API_KEY", "LLM_API_KEY");
   const memeLlmApiKey = secret("MEME_LLM_API_KEY", "LLM_API_KEY");
+  const qwenSttApiKey = secret("MLX_ASR_API_KEY");
   const qwenAuthorization = qwenTtsAuthorization();
   return new AppConfig(process.env["DATA_DIR"]?.trim() || ".data", {
     discordToken,
     ...(openAiCompatibleApiKey ? { openAiCompatibleApiKey } : {}),
     ...(memeLlmApiKey ? { memeLlmApiKey } : {}),
+    ...(qwenSttApiKey ? { qwenSttApiKey } : {}),
     ...(qwenAuthorization ? { qwenTtsAuthorization: qwenAuthorization } : {}),
   });
 }

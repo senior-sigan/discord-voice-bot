@@ -1,6 +1,25 @@
-import type { Vad } from "sherpa-onnx-node";
+import { existsSync } from "node:fs";
 
-import type { SpeechInput } from "./types.js";
+import type { Vad, VadConfig } from "sherpa-onnx-node";
+
+import { SAMPLE_RATE, type SpeechInput } from "./types.js";
+
+export function createVadConfig(model: string, threshold: number): VadConfig {
+  if (!existsSync(model)) throw new Error(`VAD model file not found: ${model}`);
+  return {
+    sileroVad: {
+      model,
+      threshold,
+      minSilenceDuration: 0.5,
+      minSpeechDuration: 0.3,
+      windowSize: 512,
+      maxSpeechDuration: 20,
+    },
+    sampleRate: SAMPLE_RATE,
+    numThreads: 1,
+    provider: "cpu",
+  };
+}
 
 /** Each speaker owns a detector; completed native segments are drained immediately. */
 export class SpeechSegmenter implements SpeechInput {
