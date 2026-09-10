@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { isRecord } from "../common.js";
 import { dataPath, loadConfig } from "../config.js";
+import { sortMemeIndexFile } from "./export-memes.js";
 
 const MEMES_DIR = dataPath("memes");
 const INPUT_FILE = dataPath("memes", "images.jsonl");
@@ -34,6 +35,80 @@ export interface MemeExplanation {
   tags: string[];
 }
 
+export class MemeImageError extends Error {
+  override readonly name = "MemeImageError";
+}
+
+export interface ExplainMemesArguments {
+  limit?: number;
+  channelName?: string;
+  channelId?: string;
+}
+
+function optionValue(args: readonly string[], index: number, option: string): [string, number] {
+  const value = args[index + 1];
+  if (value === undefined || value.startsWith("--")) throw new Error(`${option} requires a value`);
+  return [value, index + 1];
+}
+
+function positiveLimit(value: string): number {
+  const limit = Number(value);
+  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("limit must be a positive integer");
+  return limit;
+}
+
+export function parseExplainMemesArguments(args: readonly string[]): ExplainMemesArguments {
+  const options: ExplainMemesArguments = {};
+  for (let index = 0; index < args.length; index++) {
+    const argument = args[index];
+    if (argument === undefined) break;
+    let option: "channelName" | "channelId" | "limit";
+    let value: string;
+    if (argument === "--channel") {
+      option = "channelName";
+      [value, index] = optionValue(args, index, argument);
+    } else if (argument.startsWith("--channel=")) {
+      option = "channelName";
+      value = argument.slice("--channel=".length);
+    } else if (argument === "--channel-id") {
+      option = "channelId";
+      [value, index] = optionValue(args, index, argument);
+    } else if (argument.startsWith("--channel-id=")) {
+      option = "channelId";
+      value = argument.slice("--channel-id=".length);
+    } else if (argument === "--limit") {
+      option = "limit";
+      [value, index] = optionValue(args, index, argument);
+    } else if (argument.startsWith("--limit=")) {
+      option = "limit";
+      value = argument.slice("--limit=".length);
+    } else if (!argument.startsWith("--")) {
+      option = "limit";
+      value = argument;
+    } else {
+      throw new Error(`unknown option: ${argument}`);
+    }
+
+    if (options[option] !== undefined) throw new Error(`duplicate option: ${argument}`);
+    if (option === "limit") options.limit = positiveLimit(value);
+    else {
+      value = value.trim();
+      if (!value) throw new Error(`${argument.split("=")[0]} requires a non-empty value`);
+      options[option] = value;
+    }
+  }
+  if (options.channelName !== undefined && options.channelId !== undefined) {
+    throw new Error("use either --channel or --channel-id, not both");
+  }
+  return options;
+}
+
+export function matchesMemeChannel(record: Record<string, unknown>, options: ExplainMemesArguments): boolean {
+  if (options.channelId !== undefined) return record["channel_id"] === options.channelId;
+  if (options.channelName !== undefined) return record["channel_name"] === options.channelName;
+  return true;
+}
+
 export function resizeImageForLlm(imagePath: string): Buffer {
   const result = spawnSync(
     "ffmpeg",
@@ -54,9 +129,9 @@ export function resizeImageForLlm(imagePath: string): Buffer {
     ],
     { maxBuffer: 32 * 1024 * 1024 },
   );
-  if (result.error) throw new Error(`failed to resize ${imagePath}: ${result.error.message}`);
+  if (result.error) throw new MemeImageError(`failed to resize ${imagePath}: ${result.error.message}`);
   if (result.status !== 0 || !result.stdout.length) {
-    throw new Error(
+    throw new MemeImageError(
       `failed to resize ${imagePath}: ${result.stderr.toString().trim() || `ffmpeg exited ${result.status}`}`,
     );
   }
@@ -264,27 +339,53 @@ function completedAttachmentIds(input: Array<{ raw: string; record: MemeRecord }
 }
 
 async function main(): Promise<void> {
-  const config = loadConfig();
-  const options = {
-    baseUrl: config.settings.memes.llm_base_url,
-    model: config.settings.memes.llm_model,
-    ...(config.memeLlmApiKey ? { apiKey: config.memeLlmApiKey } : {}),
-  };
-  const input = readFileSync(INPUT_FILE, "utf8")
-    .split("\n")
-    .flatMap((raw, index) => (raw.trim() ? [{ raw, record: parseRecord(raw, `${INPUT_FILE}:${index + 1}`) }] : []));
-  const completed = completedAttachmentIds(input);
-  const rawLimit = process.argv[2];
-  const limit = rawLimit === undefined ? input.length : Number(rawLimit);
-  if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("optional limit must be a positive integer");
-  const pending = input.filter(({ record }) => !completed.has(record.attachment_id));
+  sortMemeIndexFile(OUTPUT_FILE);
+  try {
+    const arguments_ = parseExplainMemesArguments(process.argv.slice(2));
+    const config = loadConfig();
+    const options = {
+      baseUrl: config.settings.memes.llm_base_url,
+      model: config.settings.memes.llm_model,
+      ...(config.memeLlmApiKey ? { apiKey: config.memeLlmApiKey } : {}),
+    };
+    const input = readFileSync(INPUT_FILE, "utf8")
+      .split("\n")
+      .flatMap((raw, index) => (raw.trim() ? [{ raw, record: parseRecord(raw, `${INPUT_FILE}:${index + 1}`) }] : []));
+    const completed = completedAttachmentIds(input);
+    const selected = input.filter(({ record }) => matchesMemeChannel(record, arguments_));
+    if ((arguments_.channelName !== undefined || arguments_.channelId !== undefined) && selected.length === 0) {
+      throw new Error(`channel not found in ${INPUT_FILE}`);
+    }
+    const selectedCompleted = selected.filter(({ record }) => completed.has(record.attachment_id)).length;
+    const pending = selected.filter(({ record }) => !completed.has(record.attachment_id));
+    const limit = arguments_.limit ?? pending.length;
+    let explainedCount = 0;
+    let brokenCount = 0;
 
-  for (const [offset, item] of pending.slice(0, limit).entries()) {
-    console.log(`[${completed.size + offset + 1}/${input.length}]`);
-    console.log(item.raw);
-    const explanation = await explain(item.record, options);
-    console.log(JSON.stringify(explanation));
-    appendFileSync(OUTPUT_FILE, `${JSON.stringify({ ...item.record, ...explanation })}\n`);
+    for (const [offset, item] of pending.slice(0, limit).entries()) {
+      console.log(`[${selectedCompleted + offset + 1}/${selected.length}]`);
+      console.log(item.raw);
+      let explanation: MemeExplanation;
+      try {
+        explanation = await explain(item.record, options);
+      } catch (error) {
+        if (!(error instanceof MemeImageError)) throw error;
+        brokenCount++;
+        console.error(`Skipped broken image attachment_id=${item.record.attachment_id}: ${error.message}`);
+        continue;
+      }
+      console.log(JSON.stringify(explanation));
+      appendFileSync(OUTPUT_FILE, `${JSON.stringify({ ...item.record, ...explanation })}\n`);
+      explainedCount++;
+    }
+    console.log(
+      `Done: selected=${selected.length} already_explained=${selectedCompleted} explained=${explainedCount} broken=${brokenCount}`,
+    );
+    if (brokenCount) {
+      process.exitCode = 1;
+    }
+  } finally {
+    sortMemeIndexFile(OUTPUT_FILE);
   }
 }
 

@@ -36,6 +36,9 @@ import { startLocalControlServer } from "./local-control.js";
 import { TaskScheduler } from "./scheduler.js";
 import {
   isRetryableLlmError,
+  MemeImageError,
+  matchesMemeChannel,
+  parseExplainMemesArguments,
   parseExplanation,
   pendingAttachmentIds,
   resizeImageForLlm,
@@ -108,6 +111,17 @@ test("meme images are resized for the LLM without distortion", () => {
   }
 });
 
+test("broken meme images produce a distinguishable preprocessing error", () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-broken-meme-"));
+  const path = join(directory, "broken.png");
+  try {
+    writeFileSync(path, Buffer.from("not a png"));
+    assert.throws(() => resizeImageForLlm(path), MemeImageError);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("temporary LM Studio failures are retryable", () => {
   assert.equal(isRetryableLlmError(400, "LM Link connection entered error state peer_keepalive_timeout"), true);
   assert.equal(isRetryableLlmError(400, "The model has crashed without additional information"), true);
@@ -120,6 +134,23 @@ test("meme explanations resume by attachment id after the input is reordered", (
   assert.throws(() => pendingAttachmentIds(["one", "one"], []), /duplicate attachment_id/u);
   assert.throws(() => pendingAttachmentIds(["one"], ["missing"]), /missing from/u);
   assert.throws(() => pendingAttachmentIds(["one"], ["one", "one"]), /duplicate attachment_id/u);
+});
+
+test("meme explanation arguments support channel filters and legacy limits", () => {
+  assert.deepEqual(parseExplainMemesArguments(["100"]), { limit: 100 });
+  assert.deepEqual(parseExplainMemesArguments(["--channel", "общак", "--limit", "25"]), {
+    channelName: "общак",
+    limit: 25,
+  });
+  assert.deepEqual(parseExplainMemesArguments(["--channel-id=123", "--limit=10"]), {
+    channelId: "123",
+    limit: 10,
+  });
+  assert.equal(matchesMemeChannel({ channel_name: "общак", channel_id: "123" }, { channelName: "общак" }), true);
+  assert.equal(matchesMemeChannel({ channel_name: "общак", channel_id: "123" }, { channelId: "456" }), false);
+  assert.throws(() => parseExplainMemesArguments(["--channel", "общак", "--channel-id", "123"]), /either/u);
+  assert.throws(() => parseExplainMemesArguments(["--limit", "0"]), /positive integer/u);
+  assert.throws(() => parseExplainMemesArguments(["--wat"]), /unknown option/u);
 });
 
 test("meme exporter recognizes images and creates stable filenames", () => {
