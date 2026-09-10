@@ -13,8 +13,9 @@
     "generate-fillers": "npm run build && node --env-file=.env dist/scripts/generate-fillers.js",
     "export-memes": "npm run build && node --env-file=.env dist/scripts/export-memes.js",
     "explain-memes": "npm run build && node --env-file=.env dist/scripts/explain-memes.js",
+    "index-memes": "npm run build && node --env-file=.env dist/scripts/index-memes.js",
     "sleep": "npm run build && node --env-file=.env dist/scripts/sleep.js",
-    "test": "npm run build && node --test dist/main.test.js",
+    "test": "npm run build && node --test dist/main.test.js dist/search/search.test.js",
     "check": "tsc --noEmit && biome check . && npm test"
   },
   "dependencies": {
@@ -22,6 +23,8 @@
     "@discordjs/voice": "0.19.2",
     "@earendil-works/pi-agent-core": "0.84.3",
     "@earendil-works/pi-ai": "0.84.3",
+    "@huggingface/transformers": "4.2.0",
+    "@zvec/zvec": "0.7.1",
     "croner": "10.0.1",
     "discord.js": "14.27.0",
     "sherpa-onnx-node": "1.13.6",

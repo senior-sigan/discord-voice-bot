@@ -51,6 +51,7 @@ import {
   sortMemeIndexFile,
   sortMemeRecordsChronologically,
 } from "./scripts/export-memes.js";
+import { readMemeDocuments } from "./scripts/index-memes.js";
 import {
   chunkTranscripts,
   hourlyChunks,
@@ -59,6 +60,7 @@ import {
   validateProfileProposal,
   validateProposals,
 } from "./scripts/sleep.js";
+import { SearchStore } from "./search/index.js";
 import { createTranscriber } from "./stt/index.js";
 import { ParakeetTranscriber } from "./stt/parakeet.js";
 import { QwenHttpTranscriber } from "./stt/qwen-http.js";
@@ -1431,18 +1433,21 @@ test("reflected memory persists metadata and deduplicates exact facts", () => {
   }
 });
 
-test("meme search uses descriptions, natural dates, and returns sendable image paths", async () => {
+test("meme search uses indexed descriptions, natural dates, and returns sendable image paths", async () => {
   const directory = mkdtempSync(join(process.cwd(), ".meme-search-"));
   const path = join(directory, "memes.jsonl");
   const imagePath = join(directory, "meme.webp");
   const previousYear = new Date().getFullYear() - 1;
   const ignored = JSON.stringify({
+    attachment_id: "ignored",
+    path: "ignored.webp",
     timestamp: `${previousYear}-05-01T10:00:00Z`,
     description: "Человек задумчиво смотрит бессмысленный контент.",
     use_for: "Когда нужен котёнок за рулём.",
     tags: ["котёнок", "автомобиль"],
   });
   const expected = {
+    attachment_id: "expected",
     timestamp: `${previousYear}-06-01T10:00:00Z`,
     description: "Котёнок сидит за рулём автомобиля и серьёзно смотрит вперёд.",
     use_for: "Когда уверенно ведёшь проект.",
@@ -1450,19 +1455,31 @@ test("meme search uses descriptions, natural dates, and returns sendable image p
     path: "meme.webp",
   };
   const current = JSON.stringify({
+    attachment_id: "current",
+    path: "current.webp",
     timestamp: `${previousYear + 1}-06-01T10:00:00Z`,
     description: "Котёнок сидит за рулём автомобиля.",
   });
   try {
     writeFileSync(imagePath, "image");
     writeFileSync(path, `${ignored}\n${JSON.stringify(expected)}\n${current}\n`);
-    const result = await createMemeSearchTool(path).execute("test-memes", {
-      query: "найди мем про котенка в прошлом году",
-      limit: 5,
+    const store = new SearchStore(join(directory, "search"), {
+      identity: "test-memes-v1",
+      dimension: 2,
+      split: async (text) => [text],
+      embed: async (texts) => texts.map((text) => (/кот[её]н/iu.test(text) ? [1, 0] : [0, 1])),
     });
-    const normalized = JSON.stringify({ ...expected, path: imagePath });
-    assert.equal(result.content[0]?.type === "text" ? result.content[0].text : "", normalized);
-    assert.deepEqual((result.details as { results: string[] }).results, [normalized]);
+    await store.sync("memes", readMemeDocuments(path));
+    const result = await createMemeSearchTool(store).execute("test-memes", {
+      query: "найди мем про котенка в прошлом году",
+      limit: 1,
+    });
+    const normalized = { ...expected, path: imagePath };
+    assert.deepEqual(JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : ""), normalized);
+    assert.deepEqual(
+      (result.details as { results: string[] }).results.map((raw) => JSON.parse(raw)),
+      [normalized],
+    );
     assert.equal(safeImagePath(imagePath), imagePath);
   } finally {
     rmSync(directory, { recursive: true, force: true });

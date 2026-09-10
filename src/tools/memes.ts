@@ -1,13 +1,8 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 
-import type { HistoryEntry } from "../agent/history.js";
-import { searchHistory } from "../agent/history.js";
-import { formatMessageTime, isRecord } from "../common.js";
 import { dataPath } from "../config.js";
+import { type SearchResult, SearchStore } from "../search/index.js";
 
 const parameters = Type.Object(
   {
@@ -20,80 +15,42 @@ const parameters = Type.Object(
   { additionalProperties: false },
 );
 
-interface IndexedMeme {
-  entry: HistoryEntry;
-  raw: string;
-}
-
-export function createMemeSearchTool(path = dataPath("memes", "images_explained.jsonl")): AgentTool<typeof parameters> {
-  let memes: IndexedMeme[] | undefined;
+export function createMemeSearchTool(
+  store: Pick<SearchStore, "search"> = new SearchStore(dataPath("search")),
+): AgentTool<typeof parameters> {
   return {
     name: "search_memes",
     label: "Поиск мемов",
     description:
-      "Ищет мемы fuzzy-поиском только по их описаниям. Можно ограничить поиск датой или годом. Возвращает до пяти JSONL-строк; готовое абсолютное поле path передавай в discord_send_message как image_path.",
+      "Ищет мемы по смыслу описаний с помощью локальной embedding-модели. Формулируй ситуацию естественными словами. Можно ограничить поиск датой или годом. Возвращает до пяти JSONL-строк; готовое абсолютное поле path передавай в discord_send_message как image_path.",
     parameters,
     async execute(_toolCallId, args) {
-      memes ??= loadMemes(path);
       const date = resolveDate(args.date, args.query);
-      const candidates = date ? memes.filter((meme) => meme.entry.date.startsWith(date)) : memes;
-      const rawByEntry = new Map(candidates.map((meme) => [meme.entry, meme.raw]));
-      const ranked = searchHistory(
-        candidates.map((meme) => meme.entry),
-        { query: cleanQuery(args.query), limit: 20 },
-      );
-      const minimumRelevance = Math.max(0.45, (ranked[0]?.relevance ?? 1) - 0.1);
-      const results = ranked
-        .filter(({ relevance }) => relevance >= minimumRelevance)
-        .slice(0, Math.min(args.limit ?? 5, 5))
-        .flatMap(({ entry }) => {
-          const raw = rawByEntry.get(entry);
-          return raw === undefined ? [] : [raw];
+      let ranked: SearchResult[];
+      try {
+        ranked = await store.search("memes", args.query, {
+          limit: args.limit ?? 5,
+          ...(date ? dateRange(date) : {}),
         });
+      } catch (error) {
+        throw new Error("Поиск мемов недоступен. Проверь индекс: mise exec -- npm run index-memes", { cause: error });
+      }
+      const results = ranked.map(({ metadata }) => {
+        if (typeof metadata?.["raw"] !== "string") throw new Error("Meme search index has invalid metadata");
+        return metadata["raw"];
+      });
       return {
         content: [{ type: "text", text: results.join("\n") || "Подходящих мемов не найдено." }],
-        details: { query: args.query, ...(date ? { date } : {}), count: results.length, results },
+        details: {
+          query: args.query,
+          ...(date ? { date } : {}),
+          count: results.length,
+          results,
+          scores: ranked.map(({ id, score }) => ({ id, score })),
+        },
       };
     },
   };
-}
-
-function loadMemes(path: string): IndexedMeme[] {
-  const directory = dirname(path);
-  const memes = readFileSync(path, "utf8")
-    .split("\n")
-    .flatMap((raw) => {
-      if (!raw.trim()) return [];
-      try {
-        const value: unknown = JSON.parse(raw);
-        if (!isRecord(value) || typeof value["timestamp"] !== "string" || typeof value["description"] !== "string") {
-          return [];
-        }
-        const timestamp = new Date(value["timestamp"]);
-        if (Number.isNaN(timestamp.getTime())) return [];
-        const result =
-          typeof value["path"] === "string"
-            ? JSON.stringify({ ...value, path: resolve(directory, value["path"]) })
-            : raw;
-        return [
-          {
-            raw: result,
-            entry: {
-              timestamp: value["timestamp"],
-              date: localDate(timestamp),
-              time: formatMessageTime(timestamp),
-              kind: "transcript" as const,
-              speaker: "",
-              text: value["description"],
-            },
-          },
-        ];
-      } catch {
-        return [];
-      }
-    });
-  if (!memes.length) throw new Error(`No explained memes found in ${path}`);
-  return memes;
 }
 
 function resolveDate(value: string | undefined, query: string, now = new Date()): string | undefined {
@@ -112,18 +69,16 @@ function resolveDate(value: string | undefined, query: string, now = new Date())
   return undefined;
 }
 
-function cleanQuery(query: string): string {
-  return query
-    .replace(/(?:last_year|this_year|today|yesterday|сегодня|вчера)/giu, " ")
-    .replace(/(?:в\s+)?(?:прошл(?:ом|ый)|эт(?:ом|от))\s+году?/giu, " ")
-    .replace(/(?:найди|покажи|мем(?:а|ов|чик)?|картинк(?:а|у|и))/giu, " ")
-    .toLocaleLowerCase("ru-RU")
-    .replace(/ё/gu, "е")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim()
-    .split(/\s+/)
-    .map((word) => (word.length > 5 ? word.replace(/(?:ами|ями|ого|ему|ому|ыми|ими|ой|ей|ом|ем|ах|ях)$/u, "") : word))
-    .join(" ");
+function dateRange(date: string): { from: string; to: string } {
+  if (date.length === 4) return { from: `${date}-01-01`, to: `${date}-12-31` };
+  if (date.length === 7) {
+    const year = Number(date.slice(0, 4));
+    const month = Number(date.slice(5, 7));
+    if (month < 1 || month > 12) throw new Error(`Invalid meme date: ${date}`);
+    const last = new Date(year, month, 0).getDate();
+    return { from: `${date}-01`, to: `${date}-${last}` };
+  }
+  return { from: date, to: date };
 }
 
 function localDate(date: Date): string {
