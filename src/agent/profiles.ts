@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { errorMessage, isRecord, log } from "../common.js";
-import type { MemoryEvidence } from "./memory.js";
+import { errorMessage, isRecord, log } from "../common.ts";
+import type { MemoryEvidence } from "./memory.ts";
 
 export const PROFILE_SECTIONS = [
   "games",
@@ -38,7 +38,10 @@ export interface PersonProfile {
 export class ProfileStore {
   readonly profiles: PersonProfile[] = [];
 
-  constructor(readonly path: string) {
+  readonly path: string;
+
+  constructor(path: string) {
+    this.path = path;
     mkdirSync(dirname(path), { recursive: true });
     if (!existsSync(path)) writeFileSync(path, "[]\n");
     const value: unknown = JSON.parse(readFileSync(path, "utf8"));

@@ -10,15 +10,15 @@ import {
   Type,
 } from "@earendil-works/pi-ai";
 
-import type { HistoryEntry } from "../agent/history.js";
-import { HistoryStore, isTranscriptHistoryEntry } from "../agent/history.js";
-import type { MemoryEntry, MemoryEvidence, MemoryKind, ReflectionMemoryInput } from "../agent/memory.js";
-import { MemoryStore, normalized } from "../agent/memory.js";
-import type { PersonProfile, ProfileClaim } from "../agent/profiles.js";
-import { emptyProfileSections, PROFILE_SECTIONS, ProfileStore } from "../agent/profiles.js";
-import { createAiRuntime } from "../ai/runtime.js";
-import { isRecord } from "../common.js";
-import { loadConfig, type RuntimeSettings } from "../config.js";
+import type { HistoryEntry } from "../agent/history.ts";
+import { HistoryStore, isTranscriptHistoryEntry } from "../agent/history.ts";
+import type { MemoryEntry, MemoryEvidence, MemoryKind, ReflectionMemoryInput } from "../agent/memory.ts";
+import { MemoryStore, normalized } from "../agent/memory.ts";
+import type { PersonProfile, ProfileClaim } from "../agent/profiles.ts";
+import { emptyProfileSections, PROFILE_SECTIONS, ProfileStore } from "../agent/profiles.ts";
+import { createAiRuntime } from "../ai/runtime.ts";
+import { isRecord } from "../common.ts";
+import { loadConfig, type RuntimeSettings } from "../config.ts";
 
 const PROMPT_VERSION = "sleep-v3";
 const PROFILE_PROMPT_VERSION = "profile-v2";

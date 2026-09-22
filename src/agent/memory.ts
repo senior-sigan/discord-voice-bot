@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { errorMessage, formatMessageTime, isRecord, log } from "../common.js";
+import { errorMessage, formatMessageTime, isRecord, log } from "../common.ts";
 
 export type MemoryKind = "person" | "topic" | "story" | "moment" | "activity" | "summary";
 
@@ -58,7 +58,10 @@ export interface ReflectionMemoryInput {
 export class MemoryStore {
   readonly entries: MemoryEntry[] = [];
 
-  constructor(readonly path: string) {
+  readonly path: string;
+
+  constructor(path: string) {
+    this.path = path;
     mkdirSync(dirname(path), { recursive: true });
     appendFileSync(path, "");
     for (const [index, line] of readFileSync(path, "utf8").split("\n").entries()) {

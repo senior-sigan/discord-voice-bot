@@ -3,26 +3,27 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc",
-    "format": "biome format --write .",
-    "lint": "biome check .",
-    "lint:fix": "biome check --write .",
-    "start": "npm run build && node --env-file=.env dist/main.js",
-    "start:select": "npm run build && node --env-file=.env dist/main.js --select-model",
+    "format": "biome format .",
+    "format:fix": "biome format --write .",
+    "lint": "biome lint",
+    "lint:fix": "biome lint --write",
+    "start": "npm run type && node --env-file=.env src/main.ts",
+    "start:select": "npm run type && node --env-file=.env src/main.ts --select-model",
     "ai:login": "mkdir -p \"${DATA_DIR:-.data}\" && cd \"${DATA_DIR:-.data}\" && pi-ai login openai-codex",
-    "generate-fillers": "npm run build && node --env-file=.env dist/scripts/generate-fillers.js",
-    "export-memes": "npm run build && node --env-file=.env dist/scripts/export-memes.js",
-    "explain-memes": "npm run build && node --env-file=.env dist/scripts/explain-memes.js",
-    "index-memes": "npm run build && node --env-file=.env dist/scripts/index-memes.js",
-    "sleep": "npm run build && node --env-file=.env dist/scripts/sleep.js",
-    "test": "npm run build && node --test dist/main.test.js dist/search/search.test.js",
-    "check": "tsc --noEmit && biome check . && npm test"
+    "generate-fillers": "npm run type && node --env-file=.env src/scripts/generate-fillers.ts",
+    "export-memes": "npm run type && node --env-file=.env src/scripts/export-memes.ts",
+    "explain-memes": "npm run type && node --env-file=.env src/scripts/explain-memes.ts",
+    "index-memes": "npm run type && node --env-file=.env src/scripts/index-memes.ts",
+    "sleep": "npm run type && node --env-file=.env src/scripts/sleep.ts",
+    "test": "npm run type && node --test src/main.test.ts src/search/search.test.ts",
+    "type": "tsc --noEmit",
+    "check": "npm run type && npm run lint && npm run format"
   },
   "dependencies": {
     "@discordjs/opus": "0.10.0",
     "@discordjs/voice": "0.19.2",
-    "@earendil-works/pi-agent-core": "0.84.3",
-    "@earendil-works/pi-ai": "0.84.3",
+    "@earendil-works/pi-agent-core": "^0.87.0",
+    "@earendil-works/pi-ai": "^0.87.0",
     "@huggingface/transformers": "4.2.0",
     "@zvec/zvec": "0.7.1",
     "croner": "10.0.1",
@@ -33,6 +34,6 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
     "@types/node": "24.10.1",
-    "typescript": "5.9.3"
+    "typescript": "^7.0.2"
   }
 }

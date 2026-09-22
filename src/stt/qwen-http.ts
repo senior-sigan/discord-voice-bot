@@ -1,11 +1,11 @@
 import type { VadConfig } from "sherpa-onnx-node";
 import sherpa from "sherpa-onnx-node";
 
-import { isFillerOnlyTranscript } from "../agent/transcript.js";
-import { floatMonoToWav } from "../audio.js";
-import { errorMessage, isRecord, log } from "../common.js";
-import { SAMPLE_RATE, type SpeechInput, type Transcriber, type Transcript } from "./types.js";
-import { createVadConfig, SpeechSegmenter } from "./vad.js";
+import { isFillerOnlyTranscript } from "../agent/transcript.ts";
+import { floatMonoToWav } from "../audio.ts";
+import { errorMessage, isRecord, log } from "../common.ts";
+import { SAMPLE_RATE, type SpeechInput, type Transcriber, type Transcript } from "./types.ts";
+import { createVadConfig, SpeechSegmenter } from "./vad.ts";
 
 const { Vad } = sherpa;
 
@@ -20,10 +20,13 @@ interface QwenHttpSettings {
 export class QwenHttpTranscriber implements Transcriber {
   private queue: Promise<void> = Promise.resolve();
 
-  private constructor(
-    private readonly settings: QwenHttpSettings,
-    private readonly vadConfig: VadConfig,
-  ) {}
+  private readonly settings: QwenHttpSettings;
+  private readonly vadConfig: VadConfig;
+
+  private constructor(settings: QwenHttpSettings, vadConfig: VadConfig) {
+    this.settings = settings;
+    this.vadConfig = vadConfig;
+  }
 
   static async create(
     baseUrl: string,

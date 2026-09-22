@@ -1,25 +1,25 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 
-import type { HistoryStore } from "../agent/history.js";
-import type { MemoryStore } from "../agent/memory.js";
-import type { ProfileStore } from "../agent/profiles.js";
-import type { SkillStore } from "../agent/skills.js";
-import type { AppConfig, MutableConfigKey } from "../config.js";
-import type { TaskScheduler } from "../scheduler.js";
-import { currentDateTimeTool } from "./datetime.js";
-import { createDiscordTools, type DiscordToolsClient } from "./discord.js";
-import { createMemeSearchTool } from "./memes.js";
-import { createRememberTool, createSearchMemoryTool } from "./memory.js";
-import { createGetProfileTool } from "./profiles.js";
-import { createRecallHistoryTool } from "./recall.js";
-import { keepSilenceTool } from "./silence.js";
-import { createSkillTools } from "./skills.js";
-import { createTaskTools } from "./tasks.js";
-import { textResult } from "./types.js";
-import { webFetchTool, webSearchTool } from "./web.js";
+import type { HistoryStore } from "../agent/history.ts";
+import type { MemoryStore } from "../agent/memory.ts";
+import type { ProfileStore } from "../agent/profiles.ts";
+import type { SkillStore } from "../agent/skills.ts";
+import type { AppConfig, MutableConfigKey } from "../config.ts";
+import type { TaskScheduler } from "../scheduler.ts";
+import { currentDateTimeTool } from "./datetime.ts";
+import { createDiscordTools, type DiscordToolsClient } from "./discord.ts";
+import { createMemeSearchTool } from "./memes.ts";
+import { createRememberTool, createSearchMemoryTool } from "./memory.ts";
+import { createGetProfileTool } from "./profiles.ts";
+import { createRecallHistoryTool } from "./recall.ts";
+import { keepSilenceTool } from "./silence.ts";
+import { createSkillTools } from "./skills.ts";
+import { createTaskTools } from "./tasks.ts";
+import { textResult } from "./types.ts";
+import { webFetchTool, webSearchTool } from "./web.ts";
 
-export { isSafePublicUrl } from "./web.js";
+export { isSafePublicUrl } from "./web.ts";
 
 export function createTools(
   history: HistoryStore,

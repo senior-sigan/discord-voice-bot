@@ -4,13 +4,13 @@ import { join } from "node:path";
 import type { GeneratedAudio } from "sherpa-onnx-node";
 import sherpa from "sherpa-onnx-node";
 
-import { log } from "../common.js";
-import type { AppConfig } from "../config.js";
-import { QwenTts } from "./qwentts.js";
-import { SherpaTts } from "./sherpa.js";
-import type { Tts } from "./types.js";
+import { log } from "../common.ts";
+import type { AppConfig } from "../config.ts";
+import { QwenTts } from "./qwentts.ts";
+import { SherpaTts } from "./sherpa.ts";
+import type { Tts } from "./types.ts";
 
-export type { StreamingAudio, Tts, VoiceAudio } from "./types.js";
+export type { StreamingAudio, Tts, VoiceAudio } from "./types.ts";
 
 export async function createTts(config: AppConfig, voice?: string): Promise<Tts> {
   const { backend } = config.settings.tts;

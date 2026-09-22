@@ -4,9 +4,9 @@ import { resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
-import { isRecord } from "../common.js";
-import { dataPath, loadConfig } from "../config.js";
-import { sortMemeIndexFile } from "./export-memes.js";
+import { isRecord } from "../common.ts";
+import { dataPath, loadConfig } from "../config.ts";
+import { sortMemeIndexFile } from "./export-memes.ts";
 
 const MEMES_DIR = dataPath("memes");
 const INPUT_FILE = dataPath("memes", "images.jsonl");

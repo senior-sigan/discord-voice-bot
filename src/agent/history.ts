@@ -1,8 +1,8 @@
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { errorMessage, formatMessageTime, isRecord, log } from "../common.js";
-import { type AutoParticipationDecisionRecord, isAutoParticipationDecisionRecord } from "./auto-participation.js";
+import { errorMessage, formatMessageTime, isRecord, log } from "../common.ts";
+import { type AutoParticipationDecisionRecord, isAutoParticipationDecisionRecord } from "./auto-participation.ts";
 
 export type HistoryKind = "transcript" | "assistant" | "tool" | "auto_participation" | "voice_member_joined";
 
@@ -233,7 +233,10 @@ export function searchHistory(
 export class HistoryStore {
   readonly entries: HistoryEntry[] = [];
 
-  constructor(readonly path: string) {
+  readonly path: string;
+
+  constructor(path: string) {
+    this.path = path;
     mkdirSync(dirname(path), { recursive: true });
     appendFileSync(path, "");
     for (const [index, line] of readFileSync(path, "utf8").split("\n").entries()) {

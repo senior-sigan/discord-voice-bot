@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import {
+  BACKGROUND_CONTEXT,
   formatSkillInvocation,
   formatSkillsForSystemPrompt,
   loadSkills,
@@ -9,7 +10,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import { NodeExecutionEnv } from "@earendil-works/pi-agent-core/node";
 
-import { log } from "../common.js";
+import { log } from "../common.ts";
 
 const SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 
@@ -25,7 +26,7 @@ export class SkillStore {
 
   async load(): Promise<void> {
     await mkdir(this.directory, { recursive: true });
-    const { skills, diagnostics } = await loadSkills(this.env, this.directory);
+    const { skills, diagnostics } = await loadSkills(this.env, this.directory, BACKGROUND_CONTEXT);
     this.skills = skills.sort((left, right) => left.name.localeCompare(right.name));
     for (const diagnostic of diagnostics) {
       log("error", "skill ignored", { path: diagnostic.path, error: diagnostic.message });

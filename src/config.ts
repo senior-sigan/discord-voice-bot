@@ -3,9 +3,9 @@ import { dirname, join } from "node:path";
 
 import { z } from "zod";
 
-import { OLEG_SOUL } from "./agent/prompts.js";
-import { isRecord, log } from "./common.js";
-import { SUPERTONIC_VOICES } from "./tts/types.js";
+import { OLEG_SOUL } from "./agent/prompts.ts";
+import { isRecord, log } from "./common.ts";
+import { SUPERTONIC_VOICES } from "./tts/types.ts";
 
 const autoParticipationModeSchema = z.enum(["off", "shadow", "on"]);
 const nonBlankString = z.string().trim().min(1);
@@ -229,10 +229,10 @@ export class AppConfig {
   private document: ConfigDocument;
   private effectiveSettings: RuntimeSettings;
 
-  constructor(
-    readonly dataDir: string,
-    secrets: AppSecrets,
-  ) {
+  readonly dataDir: string;
+
+  constructor(dataDir: string, secrets: AppSecrets) {
+    this.dataDir = dataDir;
     this.file = join(dataDir, "config.json");
     this.discordToken = secrets.discordToken;
     this.openAiCompatibleApiKey = secrets.openAiCompatibleApiKey;

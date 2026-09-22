@@ -4,7 +4,7 @@ import { dirname } from "node:path";
 
 import { Cron } from "croner";
 
-import { errorMessage, isRecord, log } from "./common.js";
+import { errorMessage, isRecord, log } from "./common.ts";
 
 type ScheduledTaskBase = {
   id: string;
@@ -34,10 +34,12 @@ export class TaskScheduler {
   private readonly jobs = new Map<string, Cron>();
   private started = false;
 
-  constructor(
-    readonly path: string,
-    private readonly execute: (task: ScheduledTask) => Promise<void>,
-  ) {
+  readonly path: string;
+  private readonly execute: (task: ScheduledTask) => Promise<void>;
+
+  constructor(path: string, execute: (task: ScheduledTask) => Promise<void>) {
+    this.path = path;
+    this.execute = execute;
     mkdirSync(dirname(path), { recursive: true });
     if (!existsSync(path)) writeFileSync(path, "[]\n");
     const value: unknown = JSON.parse(readFileSync(path, "utf8"));

@@ -1,20 +1,20 @@
 import { fileURLToPath } from "node:url";
 
-import { HistoryStore } from "./agent/history.js";
-import { MemoryStore } from "./agent/memory.js";
-import { ProfileStore } from "./agent/profiles.js";
-import { AgentRuntime } from "./agent/runtime.js";
-import { SkillStore } from "./agent/skills.js";
-import { VoiceAgent } from "./agent/voice-agent.js";
-import { createAiRuntime } from "./ai/runtime.js";
-import { errorMessage, log } from "./common.js";
-import { loadConfig } from "./config.js";
-import { DiscordBot } from "./discord/bot.js";
-import { startLocalControlServer } from "./local-control.js";
-import { TaskScheduler } from "./scheduler.js";
-import { createTranscriber } from "./stt/index.js";
-import { createTools } from "./tools/index.js";
-import { createTts, loadFillers } from "./tts/index.js";
+import { HistoryStore } from "./agent/history.ts";
+import { MemoryStore } from "./agent/memory.ts";
+import { ProfileStore } from "./agent/profiles.ts";
+import { AgentRuntime } from "./agent/runtime.ts";
+import { SkillStore } from "./agent/skills.ts";
+import { VoiceAgent } from "./agent/voice-agent.ts";
+import { createAiRuntime } from "./ai/runtime.ts";
+import { errorMessage, log } from "./common.ts";
+import { loadConfig } from "./config.ts";
+import { DiscordBot } from "./discord/bot.ts";
+import { startLocalControlServer } from "./local-control.ts";
+import { TaskScheduler } from "./scheduler.ts";
+import { createTranscriber } from "./stt/index.ts";
+import { createTools } from "./tools/index.ts";
+import { createTts, loadFillers } from "./tts/index.ts";
 
 async function run(): Promise<void> {
   const config = loadConfig();

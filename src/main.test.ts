@@ -18,22 +18,22 @@ import {
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { ChannelType } from "discord.js";
 
-import { autoParticipationCommand, parseAutoParticipationVerdict } from "./agent/auto-participation.js";
-import { type HistoryEntry, HistoryStore, searchHistory } from "./agent/history.js";
-import { MemoryStore } from "./agent/memory.js";
-import { ProfileStore } from "./agent/profiles.js";
-import { buildSystemPrompt, OLEG_SOUL } from "./agent/prompts.js";
-import { AgentRuntime } from "./agent/runtime.js";
-import { SkillStore } from "./agent/skills.js";
-import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/transcript.js";
-import { formatVoiceContextTime, VoiceAgent } from "./agent/voice-agent.js";
-import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio.js";
-import { formatMessageTime } from "./common.js";
-import { AppConfig, dataPath } from "./config.js";
-import { DiscordBot, enteredVoiceChannel } from "./discord/bot.js";
-import { DiscordVoiceSession } from "./discord/voice-session.js";
-import { startLocalControlServer } from "./local-control.js";
-import { TaskScheduler } from "./scheduler.js";
+import { autoParticipationCommand, parseAutoParticipationVerdict } from "./agent/auto-participation.ts";
+import { type HistoryEntry, HistoryStore, searchHistory } from "./agent/history.ts";
+import { MemoryStore } from "./agent/memory.ts";
+import { ProfileStore } from "./agent/profiles.ts";
+import { buildSystemPrompt, OLEG_SOUL } from "./agent/prompts.ts";
+import { AgentRuntime } from "./agent/runtime.ts";
+import { SkillStore } from "./agent/skills.ts";
+import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/transcript.ts";
+import { formatVoiceContextTime, VoiceAgent } from "./agent/voice-agent.ts";
+import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio.ts";
+import { formatMessageTime } from "./common.ts";
+import { AppConfig, dataPath } from "./config.ts";
+import { DiscordBot, enteredVoiceChannel } from "./discord/bot.ts";
+import { DiscordVoiceSession } from "./discord/voice-session.ts";
+import { startLocalControlServer } from "./local-control.ts";
+import { TaskScheduler } from "./scheduler.ts";
 import {
   isRetryableLlmError,
   MemeImageError,
@@ -42,7 +42,7 @@ import {
   parseExplanation,
   pendingAttachmentIds,
   resizeImageForLlm,
-} from "./scripts/explain-memes.js";
+} from "./scripts/explain-memes.ts";
 import {
   acquireExportLock,
   imageFileName,
@@ -50,8 +50,8 @@ import {
   isImageAttachment,
   sortMemeIndexFile,
   sortMemeRecordsChronologically,
-} from "./scripts/export-memes.js";
-import { readMemeDocuments } from "./scripts/index-memes.js";
+} from "./scripts/export-memes.ts";
+import { readMemeDocuments } from "./scripts/index-memes.ts";
 import {
   chunkTranscripts,
   hourlyChunks,
@@ -59,27 +59,27 @@ import {
   structuredMemoryPayload,
   validateProfileProposal,
   validateProposals,
-} from "./scripts/sleep.js";
-import { SearchStore } from "./search/index.js";
-import { createTranscriber } from "./stt/index.js";
-import { ParakeetTranscriber } from "./stt/parakeet.js";
-import { QwenHttpTranscriber } from "./stt/qwen-http.js";
-import type { Transcriber, Transcript } from "./stt/types.js";
-import { SpeechSegmenter } from "./stt/vad.js";
-import { currentDateTimeTool } from "./tools/datetime.js";
-import { createDiscordTools, safeImagePath } from "./tools/discord.js";
-import { createMemeSearchTool } from "./tools/memes.js";
-import { createRememberTool, createSearchMemoryTool } from "./tools/memory.js";
-import { createGetProfileTool } from "./tools/profiles.js";
-import { createRecallHistoryTool } from "./tools/recall.js";
-import { keepSilenceTool } from "./tools/silence.js";
-import { createSkillTools } from "./tools/skills.js";
-import { createTaskTools } from "./tools/tasks.js";
-import { isSafePublicUrl } from "./tools/web.js";
-import type { Tts, VoiceAudio } from "./tts/index.js";
-import { fillerDirectory } from "./tts/index.js";
-import { QwenTts } from "./tts/qwentts.js";
-import { supertonicSpeakerId } from "./tts/sherpa.js";
+} from "./scripts/sleep.ts";
+import { SearchStore } from "./search/index.ts";
+import { createTranscriber } from "./stt/index.ts";
+import { ParakeetTranscriber } from "./stt/parakeet.ts";
+import { QwenHttpTranscriber } from "./stt/qwen-http.ts";
+import type { Transcriber, Transcript } from "./stt/types.ts";
+import { SpeechSegmenter } from "./stt/vad.ts";
+import { currentDateTimeTool } from "./tools/datetime.ts";
+import { createDiscordTools, safeImagePath } from "./tools/discord.ts";
+import { createMemeSearchTool } from "./tools/memes.ts";
+import { createRememberTool, createSearchMemoryTool } from "./tools/memory.ts";
+import { createGetProfileTool } from "./tools/profiles.ts";
+import { createRecallHistoryTool } from "./tools/recall.ts";
+import { keepSilenceTool } from "./tools/silence.ts";
+import { createSkillTools } from "./tools/skills.ts";
+import { createTaskTools } from "./tools/tasks.ts";
+import { isSafePublicUrl } from "./tools/web.ts";
+import type { Tts, VoiceAudio } from "./tts/index.ts";
+import { fillerDirectory } from "./tts/index.ts";
+import { QwenTts } from "./tts/qwentts.ts";
+import { supertonicSpeakerId } from "./tts/sherpa.ts";
 
 test("meme explanation parser normalizes valid structured output", () => {
   assert.deepEqual(

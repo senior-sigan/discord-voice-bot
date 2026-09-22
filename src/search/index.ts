@@ -1,4 +1,4 @@
-export { E5Embedder, type TextEmbedder } from "./embeddings.js";
+export { E5Embedder, type TextEmbedder } from "./embeddings.ts";
 export {
   type IndexProgress,
   type IndexResult,
@@ -7,4 +7,4 @@ export {
   type SearchResult,
   SearchStore,
   type SyncOptions,
-} from "./store.js";
+} from "./store.ts";

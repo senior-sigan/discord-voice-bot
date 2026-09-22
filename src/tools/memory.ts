@@ -1,11 +1,11 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 
-import type { HistoryEntry, HistoryStore } from "../agent/history.js";
-import { isTranscriptHistoryEntry, searchHistory } from "../agent/history.js";
-import type { MemoryEntry, MemoryStore } from "../agent/memory.js";
-import { normalized } from "../agent/memory.js";
-import { textResult } from "./types.js";
+import type { HistoryEntry, HistoryStore } from "../agent/history.ts";
+import { isTranscriptHistoryEntry, searchHistory } from "../agent/history.ts";
+import type { MemoryEntry, MemoryStore } from "../agent/memory.ts";
+import { normalized } from "../agent/memory.ts";
+import { textResult } from "./types.ts";
 
 const rememberParameters = Type.Object(
   {

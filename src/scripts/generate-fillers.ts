@@ -4,10 +4,10 @@ import { fileURLToPath } from "node:url";
 
 import sherpa from "sherpa-onnx-node";
 
-import { stereoPcmToMono } from "../audio.js";
-import { errorMessage } from "../common.js";
-import { loadConfig } from "../config.js";
-import { createTts, fillerDirectory, type Tts } from "../tts/index.js";
+import { stereoPcmToMono } from "../audio.ts";
+import { errorMessage } from "../common.ts";
+import { loadConfig } from "../config.ts";
+import { createTts, fillerDirectory, type Tts } from "../tts/index.ts";
 
 const FILLERS = [
   ["01-hm-seychas.wav", "Хм, сейчас."],

@@ -1,17 +1,17 @@
 import type { GeneratedAudio } from "sherpa-onnx-node";
 
-import { errorMessage, log } from "../common.js";
-import type { AppConfig } from "../config.js";
-import type { Transcript } from "../stt/index.js";
-import type { Tts, VoiceAudio } from "../tts/index.js";
+import { errorMessage, log } from "../common.ts";
+import type { AppConfig } from "../config.ts";
+import type { Transcript } from "../stt/index.ts";
+import type { Tts, VoiceAudio } from "../tts/index.ts";
 import {
   type AutoParticipationMode,
   type AutoParticipationVerdict,
   autoParticipationCommand,
-} from "./auto-participation.js";
-import type { HistoryEntry, HistoryStore } from "./history.js";
-import type { AgentRuntime } from "./runtime.js";
-import { hasStopCommand, hasWakeWord, isWakeOnly } from "./transcript.js";
+} from "./auto-participation.ts";
+import type { HistoryEntry, HistoryStore } from "./history.ts";
+import type { AgentRuntime } from "./runtime.ts";
+import { hasStopCommand, hasWakeWord, isWakeOnly } from "./transcript.ts";
 
 const GREETING_COOLDOWN_MS = 30 * 60 * 1_000;
 
@@ -48,16 +48,33 @@ export class VoiceAgent {
   private readonly lastGreetingAt = new Map<string, number>();
   private readonly followUpWindows = new Map<string, { userId: string; expiresAt: number; activation: boolean }>();
 
+  private readonly runtime: AgentRuntime;
+  private readonly history: HistoryStore;
+  private readonly tts: Tts;
+  private readonly fillers: () => readonly [GeneratedAudio, ...GeneratedAudio[]];
+  private readonly speak: (guildId: string, audio: VoiceAudio) => Promise<void>;
+  private readonly stopSpeaking: (guildId: string) => void;
+  private readonly config: AppConfig;
+  private readonly isVoiceQuiet: (guildId: string) => boolean;
+
   constructor(
-    private readonly runtime: AgentRuntime,
-    private readonly history: HistoryStore,
-    private readonly tts: Tts,
-    private readonly fillers: () => readonly [GeneratedAudio, ...GeneratedAudio[]],
-    private readonly speak: (guildId: string, audio: VoiceAudio) => Promise<void>,
-    private readonly stopSpeaking: (guildId: string) => void,
-    private readonly config: AppConfig,
-    private readonly isVoiceQuiet: (guildId: string) => boolean,
+    runtime: AgentRuntime,
+    history: HistoryStore,
+    tts: Tts,
+    fillers: () => readonly [GeneratedAudio, ...GeneratedAudio[]],
+    speak: (guildId: string, audio: VoiceAudio) => Promise<void>,
+    stopSpeaking: (guildId: string) => void,
+    config: AppConfig,
+    isVoiceQuiet: (guildId: string) => boolean,
   ) {
+    this.runtime = runtime;
+    this.history = history;
+    this.tts = tts;
+    this.fillers = fillers;
+    this.speak = speak;
+    this.stopSpeaking = stopSpeaking;
+    this.config = config;
+    this.isVoiceQuiet = isVoiceQuiet;
     log("info", "auto participation configured", { mode: config.settings.agent.auto_participation.mode });
     log("info", "voice greetings configured", { enabled: config.settings.agent.greet_on_join });
   }

@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import { z } from "zod";
 
-import { errorMessage, log } from "./common.js";
+import { errorMessage, log } from "./common.ts";
 
 const speakRequestSchema = z.strictObject({ text: z.string().trim().min(1).max(1_000) });
 const MAX_BODY_BYTES = 4_096;

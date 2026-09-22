@@ -16,7 +16,11 @@ export class E5Embedder implements TextEmbedder {
   readonly dimension = 384;
   private extractor: Promise<FeatureExtractionPipeline> | undefined;
 
-  constructor(private readonly cacheDir: string) {}
+  private readonly cacheDir: string;
+
+  constructor(cacheDir: string) {
+    this.cacheDir = cacheDir;
+  }
 
   private load(): Promise<FeatureExtractionPipeline> {
     const cached = resolve(this.cacheDir, "Xenova/multilingual-e5-small/761b726");

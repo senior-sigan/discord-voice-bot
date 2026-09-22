@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This is a Node.js TypeScript Discord voice agent. Source lives in `src/`; compiled output goes to `dist/`.
+This is a Node.js TypeScript Discord voice agent. Source lives in `src/` and runs directly with Node.js native TypeScript support.
 
 - `src/agent/`: conversation runtime, prompts, history, memory, and profiles;
 - `src/discord/`: Discord bot and voice sessions;
@@ -18,11 +18,11 @@ This is a Node.js TypeScript Discord voice agent. Source lives in `src/`; compil
 ## Build, Test, and Development Commands
 
 - `mise exec -- npm install`: install pinned dependencies.
-- `mise exec -- npm run build`: compile TypeScript into `dist/`.
-- `mise exec -- npm test`: build and run tests with Node's test runner.
-- `mise exec -- npm run check`: type-check, lint, and run all tests. Use before every commit.
-- `mise exec -- npm run lint:fix` or `npm run format`: apply Biome fixes.
-- `mise exec -- npm start`: build and start the bot using `.env`.
+- `mise exec -- npm run type`: type-check TypeScript without emitting JavaScript.
+- `mise exec -- npm test`: type-check and run TypeScript tests with Node's test runner. Use before every commit.
+- `mise exec -- npm run check`: type-check, lint, format. Use before every commit.
+- `mise exec -- npm run lint:fix` or `npm run format:fix`: apply Biome fixes.
+- `mise exec -- npm start`: type-check and start the bot using `.env`.
 - `mise exec -- npm run start:select`: start with interactive AI-model selection.
 - `mise exec -- npm run sleep -- all`: process all conversation history into memories and profiles.
 

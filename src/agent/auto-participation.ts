@@ -1,6 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 
-import { isRecord } from "../common.js";
+import { isRecord } from "../common.ts";
 
 export type AutoParticipationMode = "off" | "shadow" | "on";
 export type AutoParticipationDecision = "join" | "silent";

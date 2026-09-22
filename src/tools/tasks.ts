@@ -1,8 +1,8 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 
-import type { TaskScheduler } from "../scheduler.js";
-import { textResult } from "./types.js";
+import type { TaskScheduler } from "../scheduler.ts";
+import { textResult } from "./types.ts";
 
 const createParameters = Type.Object(
   {

@@ -6,7 +6,11 @@ import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore 
 export class JsonCredentialStore implements CredentialStore {
   private chain: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly path: string) {}
+  private readonly path: string;
+
+  constructor(path: string) {
+    this.path = path;
+  }
 
   async read(providerId: string, options?: AuthOperationOptions): Promise<Credential | undefined> {
     options?.signal?.throwIfAborted();

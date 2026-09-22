@@ -2,19 +2,19 @@ import { randomUUID } from "node:crypto";
 import type { AgentEvent, AgentTool } from "@earendil-works/pi-agent-core";
 import { Agent } from "@earendil-works/pi-agent-core";
 import type { Api, Model, Models } from "@earendil-works/pi-ai";
-import { contentText } from "@earendil-works/pi-ai";
+import { contentText, toToolDeclaration } from "@earendil-works/pi-ai";
 
-import { errorMessage, log } from "../common.js";
-import type { AppConfig } from "../config.js";
+import { errorMessage, log } from "../common.ts";
+import type { AppConfig } from "../config.ts";
 import {
   AUTO_PARTICIPATION_PROMPT,
   AUTO_PARTICIPATION_TOOL,
   type AutoParticipationVerdict,
   parseAutoParticipationVerdict,
-} from "./auto-participation.js";
-import type { HistoryStore } from "./history.js";
-import { buildSystemPrompt } from "./prompts.js";
-import type { SkillStore } from "./skills.js";
+} from "./auto-participation.ts";
+import type { HistoryStore } from "./history.ts";
+import { buildSystemPrompt } from "./prompts.ts";
+import type { SkillStore } from "./skills.ts";
 
 export type ToolCallListener = (name: string, args: string, announcement: string | undefined) => void;
 
@@ -32,14 +32,23 @@ export class AgentRuntime {
     return `${this.model.provider}/${this.model.id}`;
   }
 
+  private readonly models: Models;
+  private readonly history: HistoryStore;
+  private readonly skills: SkillStore;
+  private readonly config: AppConfig;
+
   constructor(
-    private readonly models: Models,
+    models: Models,
     model: Model<Api>,
     tools: AgentTool[],
-    private readonly history: HistoryStore,
-    private readonly skills: SkillStore,
-    private readonly config: AppConfig,
+    history: HistoryStore,
+    skills: SkillStore,
+    config: AppConfig,
   ) {
+    this.models = models;
+    this.history = history;
+    this.skills = skills;
+    this.config = config;
     this.model = model;
     this.agent = new Agent({
       initialState: {
@@ -147,7 +156,14 @@ export class AgentRuntime {
 
   private async completePrompt(prompt: string, onToolCall?: ToolCallListener, allowSilence = false): Promise<string> {
     this.agent.reset();
-    this.agent.state.systemPrompt = this.systemPrompt();
+    this.agent.state.messages = [
+      {
+        role: "system",
+        content: this.systemPrompt(),
+        toolsAdded: this.agent.state.tools.map(toToolDeclaration),
+        timestamp: Date.now(),
+      },
+    ];
     this.onToolCall = onToolCall;
     this.latestAssistantText = "";
     this.keepSilenceRequested = false;

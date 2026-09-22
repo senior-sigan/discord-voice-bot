@@ -15,6 +15,10 @@
   },
   "linter": {
     "enabled": true,
+    "domains": {
+      "project": "recommended",
+      "test": "recommended"
+    },
     "rules": {
       "preset": "recommended",
       "complexity": {

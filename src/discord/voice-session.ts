@@ -13,12 +13,12 @@ import {
 import type { Guild } from "discord.js";
 import sherpa from "sherpa-onnx-node";
 
-import { floatMonoToStereoPcm, stereoPcmToMono } from "../audio.js";
-import { errorMessage, log } from "../common.js";
-import type { Transcriber, Transcript } from "../stt/index.js";
-import { SAMPLE_RATE } from "../stt/index.js";
-import type { SpeechInput } from "../stt/types.js";
-import type { VoiceAudio } from "../tts/index.js";
+import { floatMonoToStereoPcm, stereoPcmToMono } from "../audio.ts";
+import { errorMessage, log } from "../common.ts";
+import type { Transcriber, Transcript } from "../stt/index.ts";
+import { SAMPLE_RATE } from "../stt/index.ts";
+import type { SpeechInput } from "../stt/types.ts";
+import type { VoiceAudio } from "../tts/index.ts";
 
 const { OpusEncoder } = opus;
 const { LinearResampler } = sherpa;
@@ -35,13 +35,24 @@ export class DiscordVoiceSession {
   private readonly abort = new AbortController();
   private readonly inputs = new Map<string, SpeechInput>();
 
+  readonly connection: VoiceConnection;
+  private readonly guild: Guild;
+  private readonly transcriber: Transcriber;
+  private readonly botUserId: string;
+  private readonly onTranscript: (transcript: Transcript) => void;
+
   constructor(
-    readonly connection: VoiceConnection,
-    private readonly guild: Guild,
-    private readonly transcriber: Transcriber,
-    private readonly botUserId: string,
-    private readonly onTranscript: (transcript: Transcript) => void,
+    connection: VoiceConnection,
+    guild: Guild,
+    transcriber: Transcriber,
+    botUserId: string,
+    onTranscript: (transcript: Transcript) => void,
   ) {
+    this.connection = connection;
+    this.guild = guild;
+    this.transcriber = transcriber;
+    this.botUserId = botUserId;
+    this.onTranscript = onTranscript;
     this.player = createAudioPlayer({ behaviors: { maxMissedFrames: 500 } });
     if (!connection.subscribe(this.player)) throw new Error("Failed to subscribe audio player");
     this.player.on("error", (error) =>

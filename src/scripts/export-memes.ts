@@ -25,8 +25,8 @@ import type {
 } from "discord.js";
 import { ChannelType, REST, Routes } from "discord.js";
 
-import { isRecord } from "../common.js";
-import { dataPath, loadConfig } from "../config.js";
+import { isRecord } from "../common.ts";
+import { dataPath, loadConfig } from "../config.ts";
 
 const OUTPUT_DIR = dataPath("memes");
 const IMAGE_DIR = join(OUTPUT_DIR, "images");

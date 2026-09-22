@@ -1,9 +1,9 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 
-import type { PersonProfile, ProfileStore } from "../agent/profiles.js";
-import { PROFILE_SECTIONS } from "../agent/profiles.js";
-import { textResult } from "./types.js";
+import type { PersonProfile, ProfileStore } from "../agent/profiles.ts";
+import { PROFILE_SECTIONS } from "../agent/profiles.ts";
+import { textResult } from "./types.ts";
 
 const parameters = Type.Object(
   {

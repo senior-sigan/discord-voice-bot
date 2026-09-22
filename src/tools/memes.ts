@@ -1,8 +1,8 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 
-import { dataPath } from "../config.js";
-import { type SearchResult, SearchStore } from "../search/index.js";
+import { dataPath } from "../config.ts";
+import { type SearchResult, SearchStore } from "../search/index.ts";
 
 const parameters = Type.Object(
   {

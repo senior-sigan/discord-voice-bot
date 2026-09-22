@@ -2,19 +2,22 @@ import { PassThrough } from "node:stream";
 
 import sherpa from "sherpa-onnx-node";
 
-import { floatMonoToStereoPcm, pcm16MonoToFloat } from "../audio.js";
-import { errorMessage, log } from "../common.js";
-import type { RuntimeSettings } from "../config.js";
-import { spokenText } from "./text.js";
-import type { StreamingAudio, Tts } from "./types.js";
+import { floatMonoToStereoPcm, pcm16MonoToFloat } from "../audio.ts";
+import { errorMessage, log } from "../common.ts";
+import type { RuntimeSettings } from "../config.ts";
+import { spokenText } from "./text.ts";
+import type { StreamingAudio, Tts } from "./types.ts";
 
 const { LinearResampler } = sherpa;
 
 export class QwenTts implements Tts {
-  private constructor(
-    private readonly settings: () => RuntimeSettings["tts"]["qwen"],
-    private readonly authorization: string | undefined,
-  ) {}
+  private readonly settings: () => RuntimeSettings["tts"]["qwen"];
+  private readonly authorization: string | undefined;
+
+  private constructor(settings: () => RuntimeSettings["tts"]["qwen"], authorization: string | undefined) {
+    this.settings = settings;
+    this.authorization = authorization;
+  }
 
   static async create(settings: () => RuntimeSettings["tts"]["qwen"], authorization?: string): Promise<QwenTts> {
     const current = settings();

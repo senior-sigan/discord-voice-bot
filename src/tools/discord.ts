@@ -4,7 +4,7 @@ import { extname, sep } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 
-import { textResult, toolSignal } from "./types.js";
+import { textResult, toolSignal } from "./types.ts";
 
 const IMAGE_EXTENSIONS = new Set([".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);
 

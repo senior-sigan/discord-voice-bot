@@ -13,7 +13,7 @@ import {
 } from "@zvec/zvec";
 import { z } from "zod";
 
-import { E5Embedder, type TextEmbedder } from "./embeddings.js";
+import { E5Embedder, type TextEmbedder } from "./embeddings.ts";
 
 const dateSchema = z.iso.date();
 const documentSchema = z.object({

@@ -3,8 +3,8 @@ import { isIP } from "node:net";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 
-import { isRecord } from "../common.js";
-import { textResult, toolSignal } from "./types.js";
+import { isRecord } from "../common.ts";
+import { textResult, toolSignal } from "./types.ts";
 
 export function isSafePublicUrl(value: string): boolean {
   let url: URL;

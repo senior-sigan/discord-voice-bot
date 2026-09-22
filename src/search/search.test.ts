@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { type SearchDocument, SearchStore, type TextEmbedder } from "./index.js";
+import { type SearchDocument, SearchStore, type TextEmbedder } from "./index.ts";
 
 class TestEmbedder implements TextEmbedder {
   readonly dimension = 3;

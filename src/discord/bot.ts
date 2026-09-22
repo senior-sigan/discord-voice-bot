@@ -18,10 +18,10 @@ import {
   SnowflakeUtil,
 } from "discord.js";
 
-import { errorMessage, log } from "../common.js";
-import type { Transcriber, Transcript } from "../stt/index.js";
-import type { VoiceAudio } from "../tts/index.js";
-import { DiscordVoiceSession } from "./voice-session.js";
+import { errorMessage, log } from "../common.ts";
+import type { Transcriber, Transcript } from "../stt/index.ts";
+import type { VoiceAudio } from "../tts/index.ts";
+import { DiscordVoiceSession } from "./voice-session.ts";
 
 export interface DiscordAgent {
   onTranscript(transcript: Transcript): void;
@@ -68,11 +68,15 @@ export class DiscordBot {
   private stopped = false;
   private moving = false;
 
-  constructor(
-    private readonly token: string,
-    private readonly guildId: string,
-    private readonly transcriber: Transcriber,
-  ) {}
+  private readonly token: string;
+  private readonly guildId: string;
+  private readonly transcriber: Transcriber;
+
+  constructor(token: string, guildId: string, transcriber: Transcriber) {
+    this.token = token;
+    this.guildId = guildId;
+    this.transcriber = transcriber;
+  }
 
   setAgent(agent: DiscordAgent): void {
     this.agent = agent;

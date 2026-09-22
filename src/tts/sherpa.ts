@@ -4,10 +4,10 @@ import { PassThrough } from "node:stream";
 import type { OfflineTts as OfflineTtsType } from "sherpa-onnx-node";
 import sherpa from "sherpa-onnx-node";
 
-import { floatMonoToStereoPcm } from "../audio.js";
-import { errorMessage, log } from "../common.js";
-import { spokenText } from "./text.js";
-import { type StreamingAudio, SUPERTONIC_VOICES, type Tts } from "./types.js";
+import { floatMonoToStereoPcm } from "../audio.ts";
+import { errorMessage, log } from "../common.ts";
+import { spokenText } from "./text.ts";
+import { type StreamingAudio, SUPERTONIC_VOICES, type Tts } from "./types.ts";
 
 const { LinearResampler, OfflineTts } = sherpa;
 
@@ -16,10 +16,13 @@ type GenerationRequest =
   | { generationConfig: InstanceType<typeof sherpa.GenerationConfig> };
 
 export class SherpaTts implements Tts {
-  private constructor(
-    private readonly tts: OfflineTtsType,
-    private readonly generation: GenerationRequest = { sid: 0, speed: 1 },
-  ) {}
+  private readonly tts: OfflineTtsType;
+  private readonly generation: GenerationRequest;
+
+  private constructor(tts: OfflineTtsType, generation: GenerationRequest = { sid: 0, speed: 1 }) {
+    this.tts = tts;
+    this.generation = generation;
+  }
 
   static async createPiper(modelDir: string, threads: number): Promise<SherpaTts> {
     const model = `${modelDir}/ru_RU-ruslan-medium.onnx`;

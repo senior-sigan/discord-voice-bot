@@ -1,8 +1,8 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 
-import type { SkillStore } from "../agent/skills.js";
-import { textResult } from "./types.js";
+import type { SkillStore } from "../agent/skills.ts";
+import { textResult } from "./types.ts";
 
 const viewParameters = Type.Object(
   { name: Type.String({ minLength: 1, maxLength: 64, description: "Имя скилла из доступного каталога" }) },

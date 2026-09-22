@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 
 import type { Vad, VadConfig } from "sherpa-onnx-node";
 
-import { SAMPLE_RATE, type SpeechInput } from "./types.js";
+import { SAMPLE_RATE, type SpeechInput } from "./types.ts";
 
 export function createVadConfig(model: string, threshold: number): VadConfig {
   if (!existsSync(model)) throw new Error(`VAD model file not found: ${model}`);
@@ -23,11 +23,15 @@ export function createVadConfig(model: string, threshold: number): VadConfig {
 
 /** Each speaker owns a detector; completed native segments are drained immediately. */
 export class SpeechSegmenter implements SpeechInput {
-  constructor(
-    private readonly vad: Vad,
-    private readonly onSegment: (samples: Float32Array) => void,
-    private readonly signal: AbortSignal,
-  ) {}
+  private readonly vad: Vad;
+  private readonly onSegment: (samples: Float32Array) => void;
+  private readonly signal: AbortSignal;
+
+  constructor(vad: Vad, onSegment: (samples: Float32Array) => void, signal: AbortSignal) {
+    this.vad = vad;
+    this.onSegment = onSegment;
+    this.signal = signal;
+  }
 
   accept(samples: Float32Array): void {
     if (this.signal.aborted) return;

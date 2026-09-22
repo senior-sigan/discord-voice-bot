@@ -1,9 +1,9 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 
-import type { HistorySearch, HistoryStore } from "../agent/history.js";
-import { searchHistory } from "../agent/history.js";
-import { textResult } from "./types.js";
+import type { HistorySearch, HistoryStore } from "../agent/history.ts";
+import { searchHistory } from "../agent/history.ts";
+import { textResult } from "./types.ts";
 
 const parameters = Type.Object(
   {

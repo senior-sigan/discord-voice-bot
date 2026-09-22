@@ -1,6 +1,6 @@
 [tools]
 ffmpeg = "9"
-node = "lts"
+node = "24"
 
 [tasks.install]
 description = "Install the locked Node.js dependencies"
@@ -9,12 +9,12 @@ sources = ["package.json", "package-lock.json"]
 outputs = ["node_modules/.package-lock.json"]
 
 [tasks.check]
-description = "Type-check, lint, and test the project"
+description = "Type-check, lint, and check formatting"
 depends = ["install"]
 run = "npm run check"
 
 [tasks.start]
-description = "Build and start the bot, automatically joining the master voice channel"
+description = "Type-check and start the bot, automatically joining the master voice channel"
 depends = ["install"]
 run = "npm start -- --autojoin"
 

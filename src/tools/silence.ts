@@ -1,7 +1,7 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 
-import { textResult } from "./types.js";
+import { textResult } from "./types.ts";
 
 const parameters = Type.Object({}, { additionalProperties: false });
 

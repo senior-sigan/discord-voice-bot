@@ -2,10 +2,10 @@ import { existsSync } from "node:fs";
 import type { OfflineRecognizer as OfflineRecognizerType, VadConfig } from "sherpa-onnx-node";
 import sherpa from "sherpa-onnx-node";
 
-import { isFillerOnlyTranscript } from "../agent/transcript.js";
-import { errorMessage, log } from "../common.js";
-import { SAMPLE_RATE, type SpeechInput, type Transcriber, type Transcript } from "./types.js";
-import { createVadConfig, SpeechSegmenter } from "./vad.js";
+import { isFillerOnlyTranscript } from "../agent/transcript.ts";
+import { errorMessage, log } from "../common.ts";
+import { SAMPLE_RATE, type SpeechInput, type Transcriber, type Transcript } from "./types.ts";
+import { createVadConfig, SpeechSegmenter } from "./vad.ts";
 
 const { OfflineRecognizer, Vad } = sherpa;
 
@@ -13,10 +13,13 @@ export class ParakeetTranscriber implements Transcriber {
   // ponytail: one queue avoids native decoder contention; add a small worker pool if STT latency reaches audio duration.
   private queue: Promise<void> = Promise.resolve();
 
-  private constructor(
-    private readonly recognizer: OfflineRecognizerType,
-    private readonly vadConfig: VadConfig,
-  ) {}
+  private readonly recognizer: OfflineRecognizerType;
+  private readonly vadConfig: VadConfig;
+
+  private constructor(recognizer: OfflineRecognizerType, vadConfig: VadConfig) {
+    this.recognizer = recognizer;
+    this.vadConfig = vadConfig;
+  }
 
   static async create(
     modelDir: string,

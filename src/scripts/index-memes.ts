@@ -4,8 +4,8 @@ import { pathToFileURL } from "node:url";
 
 import { z } from "zod";
 
-import { dataPath } from "../config.js";
-import { type SearchDocument, SearchStore } from "../search/index.js";
+import { dataPath } from "../config.ts";
+import { type SearchDocument, SearchStore } from "../search/index.ts";
 
 const memeSchema = z
   .object({

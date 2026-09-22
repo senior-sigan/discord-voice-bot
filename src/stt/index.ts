@@ -1,15 +1,15 @@
-import type { AppConfig } from "../config.js";
+import type { AppConfig } from "../config.ts";
 
-import { DisabledTranscriber } from "./disabled.js";
-import { ParakeetTranscriber } from "./parakeet.js";
-import { QwenHttpTranscriber } from "./qwen-http.js";
-import type { Transcriber } from "./types.js";
+import { DisabledTranscriber } from "./disabled.ts";
+import { ParakeetTranscriber } from "./parakeet.ts";
+import { QwenHttpTranscriber } from "./qwen-http.ts";
+import type { Transcriber } from "./types.ts";
 
-export { DisabledTranscriber } from "./disabled.js";
-export { ParakeetTranscriber } from "./parakeet.js";
-export { QwenHttpTranscriber } from "./qwen-http.js";
-export type { Transcriber, Transcript } from "./types.js";
-export { SAMPLE_RATE } from "./types.js";
+export { DisabledTranscriber } from "./disabled.ts";
+export { ParakeetTranscriber } from "./parakeet.ts";
+export { QwenHttpTranscriber } from "./qwen-http.ts";
+export type { Transcriber, Transcript } from "./types.ts";
+export { SAMPLE_RATE } from "./types.ts";
 
 export async function createTranscriber(config: AppConfig): Promise<Transcriber> {
   const { stt } = config.settings;

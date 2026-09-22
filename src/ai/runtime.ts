@@ -2,10 +2,10 @@ import { type Api, createModels, createProvider, type Model, type Models } from 
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 
-import { isRecord, log } from "../common.js";
-import type { AppConfig } from "../config.js";
-import { ConsolePrompter } from "./console.js";
-import { JsonCredentialStore } from "./credentials.js";
+import { isRecord, log } from "../common.ts";
+import type { AppConfig } from "../config.ts";
+import { ConsolePrompter } from "./console.ts";
+import { JsonCredentialStore } from "./credentials.ts";
 
 export type AiProviderId = "openai-codex" | "openai-compatible";
 

@@ -1,4 +1,4 @@
-import type { SpeechInput, Transcriber } from "./types.js";
+import type { SpeechInput, Transcriber } from "./types.ts";
 
 export class DisabledTranscriber implements Transcriber {
   readonly enabled = false;
