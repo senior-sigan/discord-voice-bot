@@ -55,13 +55,19 @@ export function fillerDirectory(config: AppConfig, voice?: string): string {
       encodeURIComponent(voice ?? tts.supertonic.voice),
     );
   }
-  return join(config.settings.agent.filler_dir, "piper", encodeURIComponent(tts.piper.model_dir));
+  return join(config.settings.agent.filler_dir, "piper", "0");
 }
 
 export function loadFillers(config: AppConfig): () => [GeneratedAudio, ...GeneratedAudio[]] {
   const { tts } = config.settings;
-  const voices =
-    tts.backend === "qwen" ? tts.qwen.voices : tts.backend === "supertonic" ? tts.supertonic.voices : [undefined];
+  if (tts.backend === "piper") {
+    const directory = fillerDirectory(config);
+    const fillers = readFillers(
+      waveFiles(directory).length > 0 ? directory : join(config.settings.agent.filler_dir, "piper"),
+    );
+    return () => fillers;
+  }
+  const voices = tts.backend === "qwen" ? tts.qwen.voices : tts.supertonic.voices;
   const fillers = new Map(
     voices.map((voice) => [fillerDirectory(config, voice), readFillers(fillerDirectory(config, voice))]),
   );
@@ -73,11 +79,17 @@ export function loadFillers(config: AppConfig): () => [GeneratedAudio, ...Genera
   };
 }
 
+function waveFiles(directory: string): string[] {
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory, { withFileTypes: true })
+    .filter((file) => file.isFile() && file.name.endsWith(".wav"))
+    .map((file) => file.name)
+    .sort();
+}
+
 function readFillers(directory: string): [GeneratedAudio, ...GeneratedAudio[]] {
   if (!existsSync(directory)) throw new Error(`No prepared fillers for ${directory}; run npm run generate-fillers`);
-  const files = readdirSync(directory)
-    .filter((file) => file.endsWith(".wav"))
-    .sort();
+  const files = waveFiles(directory);
   const [first, ...rest] = files.map((file) => sherpa.readWave(join(directory, file)));
   if (!first) throw new Error(`No WAV fillers found in ${directory}`);
   const fillers: [GeneratedAudio, ...GeneratedAudio[]] = [first, ...rest];

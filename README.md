@@ -6,7 +6,7 @@
 
 ## Возможности
 
-- локальное STT на Sherpa/Parakeet или Qwen3-ASR MLX с отдельным потоком для каждого участника;
+- локальное STT на Sherpa/Parakeet, Sherpa/GigaAM-v3 или Qwen3-ASR MLX с отдельным потоком для каждого участника;
 - настраиваемые слова активации (`agent.wake_words`) и остановка фразами вроде «Олег, стой»;
 - переход между голосовыми каналами по просьбе вроде «Олег, перейди в Игровую»; список каналов и выбор по ID при одинаковых названиях;
 - автоматическое участие в режимах `off`, `shadow` и `on` с записью решения и причины в историю;
@@ -40,7 +40,7 @@ Silero выделяет речь отдельно для каждого учас
 - Node.js 24 (версия закреплена в `mise.toml`), нативный запуск TypeScript без сборки;
 - Discord-приложение с bot token и доступом `bot` + `applications.commands`;
 - права Discord на просмотр канала, подключение и речь; дополнительные права нужны для сообщений и soundboard;
-- для распознавания речи: локальная модель Silero VAD и модель Parakeet либо HTTP-сервер Qwen3-ASR MLX; STT можно отключить;
+- для распознавания речи: локальная модель Silero VAD и модель Parakeet/GigaAM-v3 либо HTTP-сервер Qwen3-ASR MLX; STT можно отключить;
 - один LLM backend и один TTS backend;
 - FFmpeg — только для подготовки каталога мемов.
 
@@ -158,7 +158,39 @@ lms server start --port 1234
    npm start
    ```
 
+   Для Piper генератор сохраняет филлеры голоса `0` в `assets/fillers/piper/0`. Если в этой папке нет WAV-файлов, бот загружает их из `assets/fillers/piper`. Путь к модели Piper на расположение филлеров не влияет; базовая папка задаётся через `agent.filler_dir`.
+
 6. В Discord вызовите `/voice join` и укажите имя голосового канала. Для выхода используйте `/voice leave`.
+
+### Локальный GigaAM-v3 INT8 через sherpa-onnx
+
+Скачайте модель (около 230 МБ, версия закреплена в задаче):
+
+```bash
+mise run stt:gigaam:download
+```
+
+В `.data/config.json` у каждой модели своя секция внутри `defaults.stt` (фрагмент ниже; сохраните также VAD и Qwen):
+
+```json
+{
+  "backend": "gigaam",
+  "parakeet": {
+    "model_dir": "models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+    "threads": 2
+  },
+  "gigaam": {
+    "model_dir": "models/sherpa-onnx-nemo-transducer-giga-am-v3-russian-2025-12-16",
+    "threads": 2
+  }
+}
+```
+
+В старом конфиге перенесите общие `stt.model_dir` и `stt.threads` в секцию соответствующей модели и удалите их из корня `stt`. Добавьте секцию второй модели, как в примере.
+
+Перезапустите бота. Это русскоязычная RNN-T модель с INT8 encoder; decoder и joiner поставляются в FP32. Она работает на CPU прямо в Node.js, без Python и отдельного сервера. Silero VAD и `vad_threshold` общие для STT; `model_dir` и `threads` задаются отдельно в `stt.parakeet` и `stt.gigaam`. Это обычный GigaAM-v3 RNN-T, не E2E-вариант с пунктуацией. Для переключения меняйте только `stt.backend`: `parakeet`, `gigaam`, `qwen` или `disabled`.
+
+Источник: [GigaAM-v3 для sherpa-onnx](https://huggingface.co/csukuangfj/sherpa-onnx-nemo-transducer-giga-am-v3-russian-2025-12-16).
 
 ### Локальный Qwen3-ASR через MLX
 

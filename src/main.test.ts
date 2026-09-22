@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
@@ -17,6 +17,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { ChannelType } from "discord.js";
+import sherpa, { type OfflineRecognizerConfig } from "sherpa-onnx-node";
 
 import { autoParticipationCommand, parseAutoParticipationVerdict } from "./agent/auto-participation.ts";
 import { type HistoryEntry, HistoryStore, searchHistory } from "./agent/history.ts";
@@ -29,7 +30,7 @@ import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/tra
 import { formatVoiceContextTime, VoiceAgent } from "./agent/voice-agent.ts";
 import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio.ts";
 import { formatMessageTime } from "./common.ts";
-import { AppConfig, dataPath } from "./config.ts";
+import { AppConfig, dataPath, type RuntimeSettings } from "./config.ts";
 import { DiscordBot, enteredVoiceChannel } from "./discord/bot.ts";
 import { DiscordVoiceSession } from "./discord/voice-session.ts";
 import { startLocalControlServer } from "./local-control.ts";
@@ -62,8 +63,8 @@ import {
 } from "./scripts/sleep.ts";
 import { SearchStore } from "./search/index.ts";
 import { createTranscriber } from "./stt/index.ts";
-import { ParakeetTranscriber } from "./stt/parakeet.ts";
 import { QwenHttpTranscriber } from "./stt/qwen-http.ts";
+import { SherpaTranscriber } from "./stt/sherpa.ts";
 import type { Transcriber, Transcript } from "./stt/types.ts";
 import { SpeechSegmenter } from "./stt/vad.ts";
 import { currentDateTimeTool } from "./tools/datetime.ts";
@@ -77,9 +78,40 @@ import { createSkillTools } from "./tools/skills.ts";
 import { createTaskTools } from "./tools/tasks.ts";
 import { isSafePublicUrl } from "./tools/web.ts";
 import type { Tts, VoiceAudio } from "./tts/index.ts";
-import { fillerDirectory } from "./tts/index.ts";
+import { fillerDirectory, loadFillers } from "./tts/index.ts";
 import { QwenTts } from "./tts/qwentts.ts";
 import { supertonicSpeakerId } from "./tts/sherpa.ts";
+
+test("Piper loads voice 0 fillers with a fallback to the backend root", () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-piper-fillers-"));
+  try {
+    const config = new AppConfig(directory, { discordToken: "test" });
+    const document = JSON.parse(readFileSync(config.file, "utf8"));
+    document.defaults.agent.filler_dir = join(directory, "fillers");
+    document.defaults.tts.piper.model_dir = "/arbitrary/model/location";
+    writeFileSync(config.file, JSON.stringify(document));
+    const piperConfig = new AppConfig(directory, { discordToken: "test" });
+    const root = join(directory, "fillers", "piper");
+    const voiceDirectory = join(root, "0");
+    assert.equal(fillerDirectory(piperConfig), voiceDirectory);
+    assert.throws(() => loadFillers(piperConfig), /No prepared fillers/u);
+
+    mkdirSync(root, { recursive: true });
+    assert.throws(() => loadFillers(piperConfig), /No WAV fillers/u);
+    assert.ok(sherpa.writeWave(join(root, "root.wav"), { samples: new Float32Array(80), sampleRate: 16_000 }));
+    assert.equal(loadFillers(piperConfig)()[0].samples.length, 80);
+
+    mkdirSync(voiceDirectory);
+    mkdirSync(join(voiceDirectory, "not-a-file.wav"));
+    assert.equal(loadFillers(piperConfig)()[0].samples.length, 80);
+    assert.ok(
+      sherpa.writeWave(join(voiceDirectory, "voice.wav"), { samples: new Float32Array(160), sampleRate: 16_000 }),
+    );
+    assert.equal(loadFillers(piperConfig)()[0].samples.length, 160);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("meme explanation parser normalizes valid structured output", () => {
   assert.deepEqual(
@@ -502,7 +534,10 @@ test("config creates visible defaults and persists validated overrides", () => {
     const initial = JSON.parse(readFileSync(config.file, "utf8")) as {
       defaults: {
         agent: { filler_dir: string; soul: string; souls: Record<string, string> };
-        stt: { backend: "disabled" | "parakeet" | "qwen"; qwen: { base_url: string; language: string | null } };
+        stt: {
+          backend: "disabled" | "parakeet" | "gigaam" | "qwen";
+          qwen: { base_url: string; language: string | null };
+        };
         tts: {
           backend: "piper" | "qwen" | "supertonic";
           qwen: { base_url: string };
@@ -1835,6 +1870,59 @@ test("Qwen TTS times out before first audio and on a stalled PCM stream", async 
   }
 });
 
+test("Sherpa STT factory selects the model files and features for both backends", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-sherpa-stt-"));
+  try {
+    const initial = new AppConfig(directory, { discordToken: "test" });
+    const document = JSON.parse(readFileSync(initial.file, "utf8")) as {
+      defaults: { stt: RuntimeSettings["stt"] };
+    };
+    for (const backend of ["parakeet", "gigaam"] as const) {
+      const modelDir = join(directory, backend);
+      mkdirSync(modelDir);
+      document.defaults.stt[backend] = { model_dir: modelDir, threads: backend === "gigaam" ? 3 : 1 };
+      for (const name of ["encoder.int8.onnx", "tokens.txt"]) writeFileSync(join(modelDir, name), "test");
+    }
+    document.defaults.stt.vad_model = join(directory, "vad.onnx");
+    writeFileSync(document.defaults.stt.vad_model, "test");
+    let calls = 0;
+    let expectedBackend = "";
+    t.mock.method(sherpa.OfflineRecognizer, "createAsync", async (config: OfflineRecognizerConfig) => {
+      calls++;
+      const gigaam = expectedBackend === "gigaam";
+      assert.equal(config.featConfig.sampleRate, 16_000);
+      assert.equal(config.featConfig.featureDim, gigaam ? 64 : 80);
+      const modelDir = join(directory, expectedBackend);
+      assert.equal(config.modelConfig.numThreads, gigaam ? 3 : 1);
+      assert.deepEqual(config.modelConfig.transducer, {
+        encoder: join(modelDir, "encoder.int8.onnx"),
+        decoder: join(modelDir, gigaam ? "decoder.onnx" : "decoder.int8.onnx"),
+        joiner: join(modelDir, gigaam ? "joiner.onnx" : "joiner.int8.onnx"),
+      });
+      assert.equal(config.modelConfig.modelType, "nemo_transducer");
+      assert.equal(config.modelConfig.provider, "cpu");
+      return {};
+    });
+    for (const backend of ["parakeet", "gigaam"] as const) {
+      expectedBackend = backend;
+      const files = backend === "gigaam" ? ["decoder.onnx", "joiner.onnx"] : ["decoder.int8.onnx", "joiner.int8.onnx"];
+      document.defaults.stt.backend = backend;
+      writeFileSync(initial.file, JSON.stringify(document));
+      const config = new AppConfig(directory, { discordToken: "test" });
+      const before = calls;
+      await assert.rejects(createTranscriber(config), /model file not found/u);
+      assert.equal(calls, before);
+      for (const name of files) writeFileSync(join(directory, backend, name), "test");
+      assert.ok((await createTranscriber(config)) instanceof SherpaTranscriber);
+      assert.equal(calls, before + 1);
+      for (const name of files) rmSync(join(directory, backend, name));
+    }
+  } finally {
+    t.mock.restoreAll();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("STT skips cancelled queued work and suppresses results cancelled during decoding", async () => {
   let decodes = 0;
   let finish = (_result: { text: string }): void => undefined;
@@ -1848,7 +1936,7 @@ test("STT skips cancelled queued work and suppresses results cancelled during de
     },
   };
   // Exercise the queue independently of model files or inference speed.
-  const transcriber = Reflect.construct(ParakeetTranscriber, [recognizer, {}]) as {
+  const transcriber = Reflect.construct(SherpaTranscriber, [recognizer, {}]) as {
     enqueue(
       samples: Float32Array,
       meta: Omit<Transcript, "text">,
@@ -1958,10 +2046,11 @@ test("disabled STT needs no models or server and does not subscribe to Discord s
   try {
     const initial = new AppConfig(directory, { discordToken: "test" });
     const document = JSON.parse(readFileSync(initial.file, "utf8")) as {
-      defaults: { stt: { backend: string; model_dir: string; vad_model: string } };
+      defaults: { stt: RuntimeSettings["stt"] };
     };
     document.defaults.stt.backend = "disabled";
-    document.defaults.stt.model_dir = join(directory, "missing-parakeet");
+    document.defaults.stt.parakeet.model_dir = join(directory, "missing-parakeet");
+    document.defaults.stt.gigaam.model_dir = join(directory, "missing-gigaam");
     document.defaults.stt.vad_model = join(directory, "missing-silero.onnx");
     writeFileSync(initial.file, JSON.stringify(document));
     const transcriber = await createTranscriber(new AppConfig(directory, { discordToken: "test" }));

@@ -1,13 +1,13 @@
 import type { AppConfig } from "../config.ts";
 
 import { DisabledTranscriber } from "./disabled.ts";
-import { ParakeetTranscriber } from "./parakeet.ts";
 import { QwenHttpTranscriber } from "./qwen-http.ts";
+import { SherpaTranscriber } from "./sherpa.ts";
 import type { Transcriber } from "./types.ts";
 
 export { DisabledTranscriber } from "./disabled.ts";
-export { ParakeetTranscriber } from "./parakeet.ts";
 export { QwenHttpTranscriber } from "./qwen-http.ts";
+export { SherpaTranscriber } from "./sherpa.ts";
 export type { Transcriber, Transcript } from "./types.ts";
 export { SAMPLE_RATE } from "./types.ts";
 
@@ -26,5 +26,6 @@ export async function createTranscriber(config: AppConfig): Promise<Transcriber>
       stt.vad_threshold,
     );
   }
-  return ParakeetTranscriber.create(stt.model_dir, stt.vad_model, stt.vad_threshold, stt.threads);
+  const model = stt[stt.backend];
+  return SherpaTranscriber.create(stt.backend, model.model_dir, stt.vad_model, stt.vad_threshold, model.threads);
 }

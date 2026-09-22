@@ -9,7 +9,7 @@ import { createVadConfig, SpeechSegmenter } from "./vad.ts";
 
 const { OfflineRecognizer, Vad } = sherpa;
 
-export class ParakeetTranscriber implements Transcriber {
+export class SherpaTranscriber implements Transcriber {
   // ponytail: one queue avoids native decoder contention; add a small worker pool if STT latency reaches audio duration.
   private queue: Promise<void> = Promise.resolve();
 
@@ -22,24 +22,30 @@ export class ParakeetTranscriber implements Transcriber {
   }
 
   static async create(
+    backend: "parakeet" | "gigaam",
     modelDir: string,
     vadModel: string,
     vadThreshold: number,
     threads: number,
-  ): Promise<ParakeetTranscriber> {
-    const files = ["encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt"];
+  ): Promise<SherpaTranscriber> {
+    const gigaam = backend === "gigaam";
+    const encoder = "encoder.int8.onnx";
+    const decoder = gigaam ? "decoder.onnx" : "decoder.int8.onnx";
+    const joiner = gigaam ? "joiner.onnx" : "joiner.int8.onnx";
+    const files = [encoder, decoder, joiner, "tokens.txt"];
     for (const file of files) {
       const path = `${modelDir}/${file}`;
-      if (!existsSync(path)) throw new Error(`Parakeet model file not found: ${path}`);
+      if (!existsSync(path)) throw new Error(`${backend} model file not found: ${path}`);
     }
-    log("info", "loading Parakeet", { model_dir: modelDir });
+    log("info", "loading STT model", { backend, model_dir: modelDir });
+    const vadConfig = createVadConfig(vadModel, vadThreshold);
     const recognizer = await OfflineRecognizer.createAsync({
-      featConfig: { sampleRate: SAMPLE_RATE, featureDim: 80 },
+      featConfig: { sampleRate: SAMPLE_RATE, featureDim: gigaam ? 64 : 80 },
       modelConfig: {
         transducer: {
-          encoder: `${modelDir}/encoder.int8.onnx`,
-          decoder: `${modelDir}/decoder.int8.onnx`,
-          joiner: `${modelDir}/joiner.int8.onnx`,
+          encoder: `${modelDir}/${encoder}`,
+          decoder: `${modelDir}/${decoder}`,
+          joiner: `${modelDir}/${joiner}`,
         },
         tokens: `${modelDir}/tokens.txt`,
         numThreads: threads,
@@ -49,14 +55,13 @@ export class ParakeetTranscriber implements Transcriber {
       decodingMethod: "greedy_search",
       maxActivePaths: 4,
     });
-    const vadConfig = createVadConfig(vadModel, vadThreshold);
     log("info", "transcriber initialized", {
       provider: "cpu",
-      model: "parakeet-tdt-0.6b-v3-int8",
+      model: gigaam ? "gigaam-v3-rnnt-int8" : "parakeet-tdt-0.6b-v3-int8",
       vad: "silero-v5",
       vad_threshold: vadThreshold,
     });
-    return new ParakeetTranscriber(recognizer, vadConfig);
+    return new SherpaTranscriber(recognizer, vadConfig);
   }
 
   createInput(

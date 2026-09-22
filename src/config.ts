@@ -39,11 +39,11 @@ const settingsSchema = z.strictObject({
     }),
   }),
   stt: z.strictObject({
-    backend: z.enum(["disabled", "parakeet", "qwen"]),
-    model_dir: nonBlankString,
+    backend: z.enum(["disabled", "parakeet", "gigaam", "qwen"]),
     vad_model: nonBlankString,
     vad_threshold: z.number().min(0).max(1),
-    threads: positiveInteger,
+    parakeet: z.strictObject({ model_dir: nonBlankString, threads: positiveInteger }),
+    gigaam: z.strictObject({ model_dir: nonBlankString, threads: positiveInteger }),
     qwen: z.strictObject({
       base_url: endpointUrl,
       model: nonBlankString,
@@ -152,10 +152,16 @@ const INITIAL_DEFAULTS: RuntimeSettings = {
   },
   stt: {
     backend: "parakeet",
-    model_dir: "models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
     vad_model: "models/vad/silero_vad_v5.onnx",
     vad_threshold: 0.6,
-    threads: 2,
+    parakeet: {
+      model_dir: "models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+      threads: 2,
+    },
+    gigaam: {
+      model_dir: "models/sherpa-onnx-nemo-transducer-giga-am-v3-russian-2025-12-16",
+      threads: 2,
+    },
     qwen: {
       base_url: "http://127.0.0.1:8765/v1",
       model: "Qwen/Qwen3-ASR-0.6B",

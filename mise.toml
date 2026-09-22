@@ -23,6 +23,20 @@ description = "Process all conversation history into memories and profiles"
 depends = ["install"]
 run = "npm run sleep -- all"
 
+[tasks."stt:gigaam:download"]
+description = "Download the pinned GigaAM-v3 RNN-T INT8 model for sherpa-onnx"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+model_dir="models/sherpa-onnx-nemo-transducer-giga-am-v3-russian-2025-12-16"
+base_url="https://huggingface.co/csukuangfj/sherpa-onnx-nemo-transducer-giga-am-v3-russian-2025-12-16/resolve/0424d62637b37d8b7b1eb0f75a04d78dec55fdcc"
+mkdir -p "$model_dir"
+for file in encoder.int8.onnx decoder.onnx joiner.onnx tokens.txt LICENSE; do
+  curl --fail --location --show-error --retry 3 "$base_url/$file" -o "$model_dir/$file.part"
+  mv "$model_dir/$file.part" "$model_dir/$file"
+done
+'''
+
 [tasks."stt:qwen"]
 description = "Start the local Qwen3-ASR MLX HTTP server"
 quiet = true
