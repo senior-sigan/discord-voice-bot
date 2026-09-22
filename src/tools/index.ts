@@ -50,7 +50,7 @@ export function createTools(
 
 const runtimeConfigParameters = Type.Object(
   {
-    setting: StringEnum(["ai.model", "tts.qwen.voice", "agent.auto_participation.mode"] as const),
+    setting: StringEnum(["ai.model", "tts.qwen.voice", "tts.silero.voice", "agent.auto_participation.mode"] as const),
     value: Type.String({ minLength: 1, maxLength: 200 }),
   },
   { additionalProperties: false },
@@ -63,13 +63,18 @@ function createRuntimeConfigTool(
   return {
     name: "set_runtime_config",
     label: "Изменить настройку Олега",
-    description: `Сохраняет runtime override. Используй по просьбе сменить текущую AI-модель, голос Qwen TTS или режим автоматического участия (off, shadow, on). Доступные голоса Qwen: ${config.settings.tts.qwen.voices.join(", ")}.`,
+    description: `Сохраняет runtime override. Используй по просьбе сменить текущую AI-модель, голос Qwen/Silero TTS или режим автоматического участия (off, shadow, on). Доступные голоса Qwen: ${config.settings.tts.qwen.voices.join(", ")}. Доступные голоса Silero: ${config.settings.tts.silero.voices.join(", ")}.`,
     parameters: runtimeConfigParameters,
     async execute(_toolCallId, args) {
       const setting: MutableConfigKey = args.setting;
       if (setting === "ai.model") return textResult({ setting, ...switchModel(args.value) });
       const settings = config.setOverride(setting, args.value);
-      const value = setting === "tts.qwen.voice" ? settings.tts.qwen.voice : settings.agent.auto_participation.mode;
+      const value =
+        setting === "tts.qwen.voice"
+          ? settings.tts.qwen.voice
+          : setting === "tts.silero.voice"
+            ? settings.tts.silero.voice
+            : settings.agent.auto_participation.mode;
       return textResult({ setting, value });
     },
   };

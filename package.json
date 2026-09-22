@@ -22,8 +22,8 @@
   "dependencies": {
     "@discordjs/opus": "0.10.0",
     "@discordjs/voice": "0.19.2",
-    "@earendil-works/pi-agent-core": "^0.87.0",
-    "@earendil-works/pi-ai": "^0.87.0",
+    "@earendil-works/pi-agent-core": "^0.87.1",
+    "@earendil-works/pi-ai": "^0.87.1",
     "@huggingface/transformers": "4.2.0",
     "@zvec/zvec": "0.7.1",
     "croner": "10.0.1",

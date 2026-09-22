@@ -6,7 +6,7 @@ import sherpa from "sherpa-onnx-node";
 
 import { log } from "../common.ts";
 import type { AppConfig } from "../config.ts";
-import { QwenTts } from "./qwentts.ts";
+import { OpenAiTts } from "./openai.ts";
 import { SherpaTts } from "./sherpa.ts";
 import type { Tts } from "./types.ts";
 
@@ -28,23 +28,27 @@ export async function createTts(config: AppConfig, voice?: string): Promise<Tts>
     } = config.settings.tts.supertonic;
     return SherpaTts.createSupertonic(modelDir, threads, voice ?? configuredVoice, speed, numSteps);
   }
-  if (backend === "qwen") {
-    return QwenTts.create(() => {
-      const settings = config.settings.tts.qwen;
-      return voice ? { ...settings, voice } : settings;
-    }, config.qwenTtsAuthorization);
+  if (backend === "qwen" || backend === "silero") {
+    return OpenAiTts.create(
+      backend,
+      () => {
+        const settings = config.settings.tts[backend];
+        return voice ? { ...settings, voice } : settings;
+      },
+      backend === "qwen" ? config.qwenTtsAuthorization : undefined,
+    );
   }
   throw new Error(`Unsupported TTS backend: ${backend}`);
 }
 
 export function fillerDirectory(config: AppConfig, voice?: string): string {
   const { tts } = config.settings;
-  if (tts.backend === "qwen") {
+  if (tts.backend === "qwen" || tts.backend === "silero") {
     return join(
       config.settings.agent.filler_dir,
-      "qwen",
-      encodeURIComponent(tts.qwen.model),
-      encodeURIComponent(voice ?? tts.qwen.voice),
+      tts.backend,
+      encodeURIComponent(tts[tts.backend].model),
+      encodeURIComponent(voice ?? tts[tts.backend].voice),
     );
   }
   if (tts.backend === "supertonic") {
@@ -67,7 +71,7 @@ export function loadFillers(config: AppConfig): () => [GeneratedAudio, ...Genera
     );
     return () => fillers;
   }
-  const voices = tts.backend === "qwen" ? tts.qwen.voices : tts.supertonic.voices;
+  const voices = tts[tts.backend].voices;
   const fillers = new Map(
     voices.map((voice) => [fillerDirectory(config, voice), readFillers(fillerDirectory(config, voice))]),
   );

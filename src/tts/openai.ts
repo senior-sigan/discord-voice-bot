@@ -10,24 +10,29 @@ import type { StreamingAudio, Tts } from "./types.ts";
 
 const { LinearResampler } = sherpa;
 
-export class QwenTts implements Tts {
-  private readonly settings: () => RuntimeSettings["tts"]["qwen"];
+type Provider = "qwen" | "silero";
+type SpeechSettings = RuntimeSettings["tts"][Provider];
+
+export class OpenAiTts implements Tts {
+  private readonly provider: Provider;
+  private readonly settings: () => SpeechSettings;
   private readonly authorization: string | undefined;
 
-  private constructor(settings: () => RuntimeSettings["tts"]["qwen"], authorization: string | undefined) {
+  private constructor(provider: Provider, settings: () => SpeechSettings, authorization: string | undefined) {
+    this.provider = provider;
     this.settings = settings;
     this.authorization = authorization;
   }
 
-  static async create(settings: () => RuntimeSettings["tts"]["qwen"], authorization?: string): Promise<QwenTts> {
+  static async create(provider: Provider, settings: () => SpeechSettings, authorization?: string): Promise<OpenAiTts> {
     const current = settings();
     log("info", "TTS initialized", {
-      provider: "qwen",
+      provider,
       model: current.model,
       voice: current.voice,
       endpoint: speechEndpoint(current.base_url),
     });
-    return new QwenTts(settings, authorization);
+    return new OpenAiTts(provider, settings, authorization);
   }
 
   synthesize(text: string): StreamingAudio {
@@ -39,7 +44,7 @@ export class QwenTts implements Tts {
     const abort = new AbortController();
     let cancelled = false;
     let sampleCount = 0;
-    let timeout = setTimeout(() => abort.abort(new Error("Qwen TTS first audio timeout")), 30_000);
+    let timeout = setTimeout(() => abort.abort(new Error(`${this.provider} TTS first audio timeout`)), 30_000);
     timeout.unref();
 
     const done = (async () => {
@@ -58,9 +63,9 @@ export class QwenTts implements Tts {
           signal: abort.signal,
         });
         if (!response.ok) {
-          throw new Error(`Qwen TTS generation failed: HTTP ${response.status} ${await response.text()}`);
+          throw new Error(`${this.provider} TTS generation failed: HTTP ${response.status} ${await response.text()}`);
         }
-        if (!response.body) throw new Error("Qwen TTS returned an empty response");
+        if (!response.body) throw new Error(`${this.provider} TTS returned an empty response`);
 
         const reader = response.body.getReader();
         while (!cancelled) {
@@ -72,13 +77,13 @@ export class QwenTts implements Tts {
             const samples = pcm16MonoToFloat(pcm.subarray(0, completeSize));
             if (samples.length && !startedSpeaking) {
               startedSpeaking = true;
-              log("info", "Qwen speech started", {
+              log("info", `${this.provider} speech started`, {
                 ttfa: `${((performance.now() - started) / 1_000).toFixed(2)}s`,
               });
             }
             if (samples.length) {
               clearTimeout(timeout);
-              timeout = setTimeout(() => abort.abort(new Error("Qwen TTS audio stream stalled")), 10_000);
+              timeout = setTimeout(() => abort.abort(new Error(`${this.provider} TTS audio stream stalled`)), 10_000);
               timeout.unref();
             }
             sampleCount += samples.length;
@@ -88,7 +93,7 @@ export class QwenTts implements Tts {
           if (part.done) break;
         }
         if (!cancelled) {
-          if (pending.length) throw new Error("Qwen TTS returned truncated PCM audio");
+          if (pending.length) throw new Error(`${this.provider} TTS returned truncated PCM audio`);
           const tail = resampler.flush(new Float32Array());
           if (tail.length) stream.write(floatMonoToStereoPcm(tail));
         }
@@ -105,7 +110,7 @@ export class QwenTts implements Tts {
       const duration = sampleCount / settings.sample_rate;
       if (!cancelled) {
         log("info", "speech synthesized", {
-          provider: "qwen",
+          provider: this.provider,
           duration: `${duration.toFixed(2)}s`,
           elapsed: `${((performance.now() - started) / 1_000).toFixed(2)}s`,
         });

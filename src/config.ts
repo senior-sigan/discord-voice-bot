@@ -16,7 +16,7 @@ const wakeWordsSchema = z
   .refine((words) => new Set(words.map((word) => word.toLocaleLowerCase("ru-RU"))).size === words.length, {
     message: "Wake words must be unique",
   });
-const qwenVoiceSchema = nonBlankString.regex(/^[a-z0-9_-]+$/iu);
+const openAiVoiceSchema = nonBlankString.regex(/^[a-z0-9_-]+$/iu);
 const supertonicVoiceSchema = z.enum(SUPERTONIC_VOICES);
 const soulNameSchema = nonBlankString.regex(/^[\p{L}\p{N}][\p{L}\p{N}_.-]*$/u);
 const soulsSchema = z.record(soulNameSchema, nonBlankString);
@@ -52,7 +52,7 @@ const settingsSchema = z.strictObject({
     }),
   }),
   tts: z.strictObject({
-    backend: z.enum(["piper", "qwen", "supertonic"]),
+    backend: z.enum(["piper", "qwen", "supertonic", "silero"]),
     piper: z.strictObject({
       model_dir: nonBlankString,
       threads: positiveInteger,
@@ -79,8 +79,8 @@ const settingsSchema = z.strictObject({
         base_url: endpointUrl,
         sample_rate: positiveInteger,
         model: nonBlankString,
-        voice: qwenVoiceSchema,
-        voices: z.array(qwenVoiceSchema).min(1),
+        voice: openAiVoiceSchema,
+        voices: z.array(openAiVoiceSchema).min(1),
       })
       .refine(({ voice, voices }) => voices.includes(voice), {
         path: ["voice"],
@@ -89,6 +89,22 @@ const settingsSchema = z.strictObject({
       .refine(({ voices }) => new Set(voices).size === voices.length, {
         path: ["voices"],
         message: "Qwen voices must be unique",
+      }),
+    silero: z
+      .strictObject({
+        base_url: endpointUrl,
+        sample_rate: positiveInteger,
+        model: nonBlankString,
+        voice: openAiVoiceSchema,
+        voices: z.array(openAiVoiceSchema).min(1),
+      })
+      .refine(({ voice, voices }) => voices.includes(voice), {
+        path: ["voice"],
+        message: "Selected Silero voice must be listed in voices",
+      })
+      .refine(({ voices }) => new Set(voices).size === voices.length, {
+        path: ["voices"],
+        message: "Silero voices must be unique",
       }),
   }),
   agent: z
@@ -127,7 +143,12 @@ const settingsSchema = z.strictObject({
 
 const overridesSchema = z.strictObject({
   ai: z.strictObject({ model: nonBlankString.optional() }).optional(),
-  tts: z.strictObject({ qwen: z.strictObject({ voice: qwenVoiceSchema.optional() }).optional() }).optional(),
+  tts: z
+    .strictObject({
+      qwen: z.strictObject({ voice: openAiVoiceSchema.optional() }).optional(),
+      silero: z.strictObject({ voice: openAiVoiceSchema.optional() }).optional(),
+    })
+    .optional(),
   agent: z
     .strictObject({ auto_participation: z.strictObject({ mode: autoParticipationModeSchema.optional() }).optional() })
     .optional(),
@@ -136,7 +157,7 @@ const overridesSchema = z.strictObject({
 const configDocumentSchema = z.strictObject({ defaults: settingsSchema, overrides: overridesSchema });
 
 export type RuntimeSettings = z.infer<typeof settingsSchema>;
-export type MutableConfigKey = "ai.model" | "tts.qwen.voice" | "agent.auto_participation.mode";
+export type MutableConfigKey = "ai.model" | "tts.qwen.voice" | "tts.silero.voice" | "agent.auto_participation.mode";
 type ConfigDocument = z.infer<typeof configDocumentSchema>;
 
 const INITIAL_DEFAULTS: RuntimeSettings = {
@@ -182,6 +203,13 @@ const INITIAL_DEFAULTS: RuntimeSettings = {
       voices: [...SUPERTONIC_VOICES],
       speed: 1,
       num_steps: 8,
+    },
+    silero: {
+      base_url: "http://127.0.0.1:8000",
+      sample_rate: 24_000,
+      model: "silero-v5.5",
+      voice: "xenia",
+      voices: ["aidar", "baya", "kseniya", "eugene", "xenia"],
     },
     qwen: {
       base_url: "http://127.0.0.1:8000",
@@ -254,11 +282,9 @@ export class AppConfig {
       stt_backend: this.effectiveSettings.stt.backend,
       tts_backend: this.effectiveSettings.tts.backend,
       tts_voice:
-        this.effectiveSettings.tts.backend === "qwen"
-          ? this.effectiveSettings.tts.qwen.voice
-          : this.effectiveSettings.tts.backend === "supertonic"
-            ? this.effectiveSettings.tts.supertonic.voice
-            : "ru_RU-ruslan-medium",
+        this.effectiveSettings.tts.backend === "piper"
+          ? "ru_RU-ruslan-medium"
+          : this.effectiveSettings.tts[this.effectiveSettings.tts.backend].voice,
       auto_participation: this.effectiveSettings.agent.auto_participation.mode,
       soul: this.effectiveSettings.agent.soul,
       greet_on_join: this.effectiveSettings.agent.greet_on_join,
@@ -306,10 +332,10 @@ export class AppConfig {
     if (key === "ai.model") {
       next.overrides.ai ??= {};
       next.overrides.ai.model = nonBlankString.parse(rawValue);
-    } else if (key === "tts.qwen.voice") {
+    } else if (key === "tts.qwen.voice" || key === "tts.silero.voice") {
+      const provider = key === "tts.qwen.voice" ? "qwen" : "silero";
       next.overrides.tts ??= {};
-      next.overrides.tts.qwen ??= {};
-      next.overrides.tts.qwen.voice = nonBlankString.parse(rawValue);
+      next.overrides.tts[provider] = { voice: nonBlankString.parse(rawValue) };
     } else {
       next.overrides.agent ??= {};
       next.overrides.agent.auto_participation ??= {};

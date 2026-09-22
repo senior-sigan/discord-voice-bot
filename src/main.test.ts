@@ -78,8 +78,8 @@ import { createSkillTools } from "./tools/skills.ts";
 import { createTaskTools } from "./tools/tasks.ts";
 import { isSafePublicUrl } from "./tools/web.ts";
 import type { Tts, VoiceAudio } from "./tts/index.ts";
-import { fillerDirectory, loadFillers } from "./tts/index.ts";
-import { QwenTts } from "./tts/qwentts.ts";
+import { createTts, fillerDirectory, loadFillers } from "./tts/index.ts";
+import { OpenAiTts } from "./tts/openai.ts";
 import { supertonicSpeakerId } from "./tts/sherpa.ts";
 
 test("Piper loads voice 0 fillers with a fallback to the backend root", () => {
@@ -539,7 +539,7 @@ test("config creates visible defaults and persists validated overrides", () => {
           qwen: { base_url: string; language: string | null };
         };
         tts: {
-          backend: "piper" | "qwen" | "supertonic";
+          backend: "piper" | "qwen" | "supertonic" | "silero";
           qwen: { base_url: string };
           supertonic: { model_dir: string; voice: string; voices: string[] };
         };
@@ -573,12 +573,15 @@ test("config creates visible defaults and persists validated overrides", () => {
 
     config.setOverride("ai.model", "gpt-5.6-sol");
     config.setOverride("tts.qwen.voice", "arthas");
+    config.setOverride("tts.silero.voice", "aidar");
     config.setOverride("agent.auto_participation.mode", "shadow");
     assert.throws(() => config.setOverride("agent.auto_participation.mode", "always"));
 
     const reloaded = new AppConfig(directory, { discordToken: "test" });
     assert.equal(reloaded.settings.ai.model, "gpt-5.6-sol");
     assert.equal(reloaded.settings.tts.qwen.voice, "arthas");
+    assert.equal(reloaded.settings.tts.silero.voice, "aidar");
+    assert.throws(() => config.setOverride("tts.silero.voice", "unknown"), /listed in voices/u);
     assert.throws(() => config.setOverride("tts.qwen.voice", "unknown"), /listed in voices/u);
     assert.equal(reloaded.settings.agent.auto_participation.mode, "shadow");
 
@@ -626,6 +629,7 @@ test("config rejects incomplete settings instead of filling missing fields", () 
       ["stt", "backend"],
       ["stt", "qwen"],
       ["tts", "supertonic"],
+      ["tts", "silero"],
       ["agent", "soul"],
       ["agent", "souls"],
       ["agent", "wake_words"],
@@ -914,7 +918,7 @@ test("Qwen TTS streams OpenAI-compatible PCM with Basic Auth", async () => {
       voices: ["old-voice", "keltuzad"],
     };
     const authorization = `Basic ${Buffer.from("qwen:p@ss").toString("base64")}`;
-    const tts = await QwenTts.create(() => settings, authorization);
+    const tts = await OpenAiTts.create("qwen", () => settings, authorization);
     settings.voice = "keltuzad";
     const audio = tts.synthesize("Привет!");
     const chunks: Buffer[] = [];
@@ -923,6 +927,64 @@ test("Qwen TTS streams OpenAI-compatible PCM with Basic Auth", async () => {
     assert.ok(Buffer.concat(chunks).length > 0);
   } finally {
     globalThis.fetch = previousFetch;
+  }
+});
+
+test("Silero factory emits audio before the HTTP response completes and supports cancellation", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-silero-"));
+  const previousFetch = globalThis.fetch;
+  try {
+    const initial = new AppConfig(directory, { discordToken: "test" });
+    const document = JSON.parse(readFileSync(initial.file, "utf8")) as { defaults: RuntimeSettings };
+    document.defaults.tts.backend = "silero";
+    writeFileSync(initial.file, JSON.stringify(document));
+    const config = new AppConfig(directory, { discordToken: "test", qwenTtsAuthorization: "Bearer qwen-only" });
+    assert.equal(fillerDirectory(config), join(config.settings.agent.filler_dir, "silero", "silero-v5.5", "xenia"));
+    const tts = await createTts(config);
+    config.setOverride("tts.silero.voice", "aidar");
+    let signal: AbortSignal | null | undefined;
+    globalThis.fetch = (async (input, init) => {
+      assert.equal(input, "http://127.0.0.1:8000/v1/audio/speech");
+      assert.equal(new Headers(init?.headers).get("Authorization"), null);
+      assert.deepEqual(JSON.parse(String(init?.body)), {
+        input: "Привет!",
+        model: "silero-v5.5",
+        voice: "aidar",
+        response_format: "pcm",
+      });
+      signal = init?.signal;
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(4_800));
+            signal?.addEventListener("abort", () => controller.error(signal?.reason), { once: true });
+          },
+        }),
+      );
+    }) as typeof fetch;
+    const audio = tts.synthesize("Привет!");
+    let completed = false;
+    void audio.done.then(() => {
+      completed = true;
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("No audio before response completion")), 1_000);
+        audio.stream.once("data", (chunk: Buffer) => {
+          clearTimeout(timeout);
+          assert.ok(chunk.length > 0);
+          resolve();
+        });
+      });
+      assert.equal(completed, false);
+    } finally {
+      audio.cancel();
+    }
+    await audio.done;
+    assert.equal(signal?.aborted, true);
+  } finally {
+    globalThis.fetch = previousFetch;
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -1839,7 +1901,7 @@ test("Qwen TTS times out before first audio and on a stalled PCM stream", async 
       voice: "test",
       voices: ["test"],
     };
-    const tts = await QwenTts.create(() => config);
+    const tts = await OpenAiTts.create("qwen", () => config);
     for (const stalled of [false, true]) {
       globalThis.fetch = (async (_input, init) => {
         const signal = init?.signal;
