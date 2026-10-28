@@ -29,6 +29,7 @@ export type ProfileSections = Record<ProfileSection, ProfileClaim[]>;
 export interface PersonProfile {
   user_id: string;
   name: string;
+  aliases: string[];
   updated_at: string;
   source_from: string;
   source_to: string;
@@ -48,8 +49,9 @@ export class ProfileStore {
     if (!Array.isArray(value)) throw new Error(`Invalid profiles file: ${path}`);
     for (const [index, profile] of value.entries()) {
       try {
-        if (!isPersonProfile(profile)) throw new Error("invalid profile shape");
-        this.profiles.push(profile);
+        const migrated = isRecord(profile) ? { aliases: [], ...profile } : profile;
+        if (!isPersonProfile(migrated)) throw new Error("invalid profile shape");
+        this.profiles.push(migrated);
       } catch (error) {
         log("error", "invalid profile skipped", { index: index + 1, error: errorMessage(error) });
       }
@@ -69,7 +71,9 @@ export class ProfileStore {
     const needle = query.toLocaleLowerCase("ru-RU").trim();
     if (!needle) return [];
     return this.profiles.filter(
-      (profile) => profile.user_id === needle || profile.name.toLocaleLowerCase("ru-RU").includes(needle),
+      (profile) =>
+        profile.user_id === needle ||
+        [profile.name, ...profile.aliases].some((name) => name.toLocaleLowerCase("ru-RU").includes(needle)),
     );
   }
 
@@ -98,6 +102,8 @@ function isPersonProfile(value: unknown): value is PersonProfile {
     !isRecord(value) ||
     typeof value["user_id"] !== "string" ||
     typeof value["name"] !== "string" ||
+    !Array.isArray(value["aliases"]) ||
+    !value["aliases"].every((alias: unknown) => typeof alias === "string" && alias.trim().length > 0) ||
     typeof value["updated_at"] !== "string" ||
     typeof value["source_from"] !== "string" ||
     typeof value["source_to"] !== "string" ||

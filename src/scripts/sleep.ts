@@ -21,7 +21,7 @@ import { isRecord } from "../common.ts";
 import { loadConfig, type RuntimeSettings } from "../config.ts";
 
 const PROMPT_VERSION = "sleep-v3";
-const PROFILE_PROMPT_VERSION = "profile-v2";
+const PROFILE_PROMPT_VERSION = "profile-v3";
 const DEFAULT_CHUNK_CHARS = 60_000;
 const MEMORY_TOOL = {
   name: "submit_memories",
@@ -94,6 +94,17 @@ const PROFILE_TOOL = {
   description: "Возвращает один структурированный профиль участника.",
   parameters: Type.Object(
     {
+      aliases: Type.Array(
+        Type.Object(
+          {
+            name: Type.String({ minLength: 1, maxLength: 100 }),
+            source_timestamp: Type.String({ minLength: 1 }),
+            quote: Type.String({ minLength: 1, maxLength: 1_000 }),
+          },
+          { additionalProperties: false },
+        ),
+        { maxItems: 20 },
+      ),
       sections: Type.Object(
         {
           games: Type.Array(PROFILE_CLAIM, { maxItems: 20 }),
@@ -129,6 +140,8 @@ const SYSTEM_PROMPT = `Ты выполняешь ночную рефлексию
 Плохое распознавание речи учитывай как неопределённость. Если нельзя подтвердить, что люди именно играли или смотрели что-то, пиши «обсуждали». Не превращай игровой трёп в факты о личности. Объединяй повторы. Вызови submit_memories ровно один раз и ничего больше не отвечай.`;
 
 const PROFILE_SYSTEM_PROMPT = `Ты обновляешь структурированный профиль одного участника частного голосового Discord.
+
+В aliases верни имена, сокращения и прозвища, которыми участник явно назвал себя: для каждого укажи name, source_timestamp и дословную quote из его реплики. Не выводи имя из Discord-ника и не добавляй имена других людей, упомянутых участником. Если подтверждений нет, верни пустой массив.
 
 Заполняй только семь заданных разделов:
 - games: игры, в которые человек явно играет или регулярно возвращается;
@@ -410,7 +423,7 @@ async function proposeProfile(
               rejectedToolResult(correction.response, PROFILE_TOOL.name, correction.rejected),
               {
                 role: "user",
-                content: `Валидация отклонила часть результата:\n${correction.rejected.join("\n")}\n\nВерни только исправленные замены отклонённых пунктов; для остальных разделов верни пустые массивы. Не повторяй уже принятые пункты.`,
+                content: `Валидация отклонила часть результата:\n${correction.rejected.join("\n")}\n\nВерни только исправленные замены отклонённых пунктов; в разделах и aliases без исправлений верни пустые массивы. Не повторяй уже принятые пункты.`,
                 timestamp: Date.now(),
               },
             ]
@@ -451,6 +464,36 @@ export function validateProfileProposal(
   const byTimestamp = new Map(entries.map((entry) => [entry.timestamp, entry]));
   const sections = emptyProfileSections();
   const rejected: string[] = [];
+  const aliases: string[] = [];
+  if (!Array.isArray(value["aliases"])) {
+    rejected.push("aliases: missing array");
+  } else {
+    for (const [index, alias] of value["aliases"].entries()) {
+      if (
+        !isRecord(alias) ||
+        typeof alias["name"] !== "string" ||
+        !alias["name"].trim() ||
+        alias["name"].length > 100 ||
+        typeof alias["source_timestamp"] !== "string" ||
+        typeof alias["quote"] !== "string" ||
+        !alias["quote"].trim()
+      ) {
+        rejected.push(`aliases #${index + 1}: invalid shape`);
+        continue;
+      }
+      const source = byTimestamp.get(alias["source_timestamp"]);
+      if (
+        source?.kind !== "transcript" ||
+        !normalized(source.text).includes(normalized(alias["quote"])) ||
+        !normalized(alias["quote"]).includes(normalized(alias["name"]))
+      ) {
+        rejected.push(`aliases #${index + 1}: requires a verbatim self-reference`);
+        continue;
+      }
+      const name = alias["name"].trim();
+      if (!aliases.some((existing) => normalized(existing) === normalized(name))) aliases.push(name);
+    }
+  }
 
   for (const section of PROFILE_SECTIONS) {
     const candidates = value["sections"][section];
@@ -506,6 +549,7 @@ export function validateProfileProposal(
     profile: {
       user_id: userId,
       name,
+      aliases,
       updated_at: now.toISOString(),
       source_from: sourceFrom,
       source_to: sourceTo,
@@ -523,6 +567,7 @@ function emptyProfile(userId: string, name: string, sources: HistoryEntry[], now
   return {
     user_id: userId,
     name,
+    aliases: [],
     updated_at: now.toISOString(),
     source_from: timestamps[0] ?? "",
     source_to: timestamps.at(-1) ?? "",
@@ -538,7 +583,13 @@ function mergeProfiles(base: PersonProfile, repair: PersonProfile): PersonProfil
         sections[section].push(claim);
     }
   }
-  return { ...base, updated_at: repair.updated_at, sections };
+  return { ...base, aliases: mergeAliases(base.aliases, repair.aliases), updated_at: repair.updated_at, sections };
+}
+
+function mergeAliases(...groups: string[][]): string[] {
+  const aliases = new Map<string, string>();
+  for (const alias of groups.flat()) aliases.set(normalized(alias), alias);
+  return [...aliases.values()];
 }
 
 async function proposedMemories(
@@ -713,7 +764,10 @@ ${JSON.stringify(candidates.map(profileCandidateJson))}`,
     id,
     name,
   );
-  return { profile: consolidated.profile, rejected: [...rejected, ...consolidated.rejected] };
+  return {
+    profile: { ...consolidated.profile, aliases: mergeAliases(...candidates.map((profile) => profile.aliases)) },
+    rejected: [...rejected, ...consolidated.rejected],
+  };
 }
 
 async function reflectTopics(
@@ -896,7 +950,8 @@ async function main(): Promise<void> {
         participant.name,
         config.settings.sleep.max_tokens,
       );
-      profiles.upsert(result.profile);
+      const previous = profiles.profiles.find((profile) => profile.user_id === id);
+      profiles.upsert({ ...result.profile, aliases: mergeAliases(previous?.aliases ?? [], result.profile.aliases) });
       const saved = PROFILE_SECTIONS.reduce((count, section) => count + result.profile.sections[section].length, 0);
       state[key] = { hash, model: ai.model.id, processed_at: new Date().toISOString(), memories: saved };
       saveState(statePath, state);

@@ -1389,12 +1389,13 @@ test("person profiles are structured, updated in place and hide raw evidence fro
       kind: "transcript" as const,
       speaker: "Илья",
       speaker_id: "1",
-      text: "Сейчас работаю над голосовым агентом для Discord",
+      text: "Зовите меня Сиган. Сейчас работаю над голосовым агентом для Discord",
     },
   ] satisfies [HistoryEntry, HistoryEntry, HistoryEntry];
   try {
     const result = validateProfileProposal(
       {
+        aliases: [{ name: "Сиган", source_timestamp: sources[2].timestamp, quote: "Зовите меня Сиган" }],
         sections: {
           games: [
             {
@@ -1435,7 +1436,26 @@ test("person profiles are structured, updated in place and hide raw evidence fro
     assert.equal(result.profile.sections.games.length, 1);
     assert.equal(result.profile.sections.work_projects.length, 1);
     assert.equal(result.profile.sections.media.length, 0);
+    assert.deepEqual(result.profile.aliases, ["Сиган"]);
     assert.match(result.rejected[0] ?? "", /two different messages/u);
+
+    const invalidAliases = validateProfileProposal(
+      {
+        sections: Object.fromEntries(Object.keys(result.profile.sections).map((section) => [section, []])),
+        aliases: [
+          { name: "Сиган", source_timestamp: sources[2].timestamp, quote: "Зовите меня Сиган" },
+          { name: "сиган", source_timestamp: sources[2].timestamp, quote: "Зовите меня Сиган" },
+          { name: "Вася", source_timestamp: sources[2].timestamp, quote: "Зовите меня Вася" },
+          { name: "Discord", source_timestamp: sources[0].timestamp, quote: "Зовите меня Discord" },
+          { name: "Петя", source_timestamp: "2026-08-28T10:00:00.000Z", quote: "Меня зовут Петя" },
+        ],
+      },
+      [...sources, { ...sources[0], timestamp: "2026-08-28T10:00:00.000Z", speaker_id: "2", text: "Меня зовут Петя" }],
+      "1",
+      "Илья",
+    );
+    assert.deepEqual(invalidAliases.profile.aliases, ["Сиган"]);
+    assert.equal(invalidAliases.rejected.length, 3);
 
     const path = join(directory, "profiles.json");
     const store = new ProfileStore(path);
@@ -1444,13 +1464,26 @@ test("person profiles are structured, updated in place and hide raw evidence fro
     const reloaded = new ProfileStore(path);
     assert.equal(reloaded.profiles.length, 1);
     assert.equal(reloaded.profiles[0]?.name, "Илья Новый");
+    assert.equal(reloaded.find(" сиГан ")[0]?.user_id, "1");
+    assert.equal(reloaded.find("Илья")[0]?.user_id, "1");
+    assert.equal(reloaded.find(" ").length, 0);
+    reloaded.upsert({ ...result.profile, user_id: "2", name: "Другой" });
+    assert.equal(reloaded.find("Сиган").length, 2);
     assert.match(readFileSync(path, "utf8"), /снова играл в Deadlock/u);
 
     const profileTool = createGetProfileTool(reloaded);
     assert.match(profileTool.description, /Илья Новый \(1\)/u);
+    assert.match(profileTool.description, /Сиган/u);
     const response = await profileTool.execute("get-profile", { person: "1" });
     const agentView = response.content[0]?.type === "text" ? response.content[0].text : "";
     assert.doesNotMatch(agentView, /evidence|снова играл в Deadlock/u);
+    assert.deepEqual(JSON.parse(agentView).profiles[0].aliases, ["Сиган"]);
+
+    const { aliases: _aliases, ...legacy } = result.profile;
+    writeFileSync(path, JSON.stringify([legacy, { ...legacy, user_id: "2", aliases: [42] }]));
+    const migrated = new ProfileStore(path);
+    assert.equal(migrated.profiles.length, 1);
+    assert.deepEqual(migrated.profiles[0]?.aliases, []);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
