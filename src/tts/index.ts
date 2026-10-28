@@ -9,11 +9,13 @@ import type { AppConfig } from "../config.ts";
 import { OpenAiTts } from "./openai.ts";
 import { SherpaTts } from "./sherpa.ts";
 import type { Tts } from "./types.ts";
+import { VoxCpmTts } from "./voxcpm.ts";
 
 export type { StreamingAudio, Tts, VoiceAudio } from "./types.ts";
 
 export async function createTts(config: AppConfig, voice?: string): Promise<Tts> {
   const { backend } = config.settings.tts;
+  if (backend === "voxcpm") return new VoxCpmTts(config.settings.tts.voxcpm);
   if (backend === "piper") {
     const { model_dir: modelDir, threads } = config.settings.tts.piper;
     return SherpaTts.createPiper(modelDir, threads);
@@ -43,6 +45,14 @@ export async function createTts(config: AppConfig, voice?: string): Promise<Tts>
 
 export function fillerDirectory(config: AppConfig, voice?: string): string {
   const { tts } = config.settings;
+  if (tts.backend === "voxcpm") {
+    return join(
+      config.settings.agent.filler_dir,
+      "voxcpm",
+      encodeURIComponent(tts.voxcpm.model),
+      encodeURIComponent(tts.voxcpm.voice),
+    );
+  }
   if (tts.backend === "qwen" || tts.backend === "silero") {
     return join(
       config.settings.agent.filler_dir,
@@ -69,6 +79,10 @@ export function loadFillers(config: AppConfig): () => [GeneratedAudio, ...Genera
     const fillers = readFillers(
       waveFiles(directory).length > 0 ? directory : join(config.settings.agent.filler_dir, "piper"),
     );
+    return () => fillers;
+  }
+  if (tts.backend === "voxcpm") {
+    const fillers = readFillers(fillerDirectory(config));
     return () => fillers;
   }
   const voices = tts[tts.backend].voices;

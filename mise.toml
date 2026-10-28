@@ -1,6 +1,15 @@
 [tools]
 ffmpeg = "9"
 node = "24"
+"pypi:ddgs" = { version = "9.16.0", extras = "api", python = "3.12" }
+
+[tasks."search:start"]
+description = "Start the local DDGS search HTTP server"
+run = "ddgs api --host 127.0.0.1 --port 4479"
+
+[tasks."search:health"]
+description = "Check the local DDGS search server"
+run = "curl --silent --show-error --fail-with-body --max-time 5 http://127.0.0.1:4479/health"
 
 [tasks.install]
 description = "Install the locked Node.js dependencies"
@@ -14,9 +23,9 @@ depends = ["install"]
 run = "npm run check"
 
 [tasks.start]
-description = "Type-check and start the bot, automatically joining the master voice channel"
+description = "Start DDGS and the bot, automatically joining the master voice channel"
 depends = ["install"]
-run = "npm start -- --autojoin"
+run = "npm run type && node src/scripts/start-with-search.ts node --env-file=.env src/main.ts --autojoin"
 
 [tasks.sleep]
 description = "Process all conversation history into memories and profiles"

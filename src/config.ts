@@ -52,7 +52,14 @@ const settingsSchema = z.strictObject({
     }),
   }),
   tts: z.strictObject({
-    backend: z.enum(["piper", "qwen", "supertonic", "silero"]),
+    backend: z.enum(["piper", "qwen", "supertonic", "silero", "voxcpm"]),
+    voxcpm: z.strictObject({
+      url: endpointUrl,
+      model: nonBlankString,
+      voice: nonBlankString,
+      response_format: z.literal("wav"),
+      timeout_ms: positiveInteger,
+    }),
     piper: z.strictObject({
       model_dir: nonBlankString,
       threads: positiveInteger,
@@ -118,6 +125,7 @@ const settingsSchema = z.strictObject({
       context_chars: positiveInteger.min(1_000),
       greet_on_join: z.boolean(),
       follow_up_window_ms: nonNegativeInteger,
+      web_search: z.strictObject({ base_url: endpointUrl }),
       local_control: z.strictObject({ enabled: z.boolean(), host: nonBlankString, port: positiveInteger.max(65_535) }),
       auto_participation: z.strictObject({
         mode: autoParticipationModeSchema,
@@ -192,6 +200,13 @@ const INITIAL_DEFAULTS: RuntimeSettings = {
   },
   tts: {
     backend: "piper",
+    voxcpm: {
+      url: "http://192.168.88.21:8000/v1/audio/speech",
+      model: "voxcpm2",
+      voice: "Koshkodevochka",
+      response_format: "wav",
+      timeout_ms: 180_000,
+    },
     piper: {
       model_dir: "models/vits-piper-ru_RU-ruslan-medium",
       threads: 2,
@@ -229,6 +244,7 @@ const INITIAL_DEFAULTS: RuntimeSettings = {
     context_chars: 12_000,
     greet_on_join: true,
     follow_up_window_ms: 30_000,
+    web_search: { base_url: "http://127.0.0.1:4479" },
     local_control: { enabled: true, host: "127.0.0.1", port: 7_070 },
     auto_participation: {
       mode: "off",

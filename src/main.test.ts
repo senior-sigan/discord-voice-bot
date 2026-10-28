@@ -28,7 +28,7 @@ import { AgentRuntime } from "./agent/runtime.ts";
 import { SkillStore } from "./agent/skills.ts";
 import { hasStopCommand, hasWakeWord, isFillerOnlyTranscript } from "./agent/transcript.ts";
 import { formatVoiceContextTime, VoiceAgent } from "./agent/voice-agent.ts";
-import { floatMonoToStereoPcm, pcm16MonoToFloat, stereoPcmToMono } from "./audio.ts";
+import { floatMonoToStereoPcm, floatMonoToWav, pcm16MonoToFloat, stereoPcmToMono } from "./audio.ts";
 import { formatMessageTime } from "./common.ts";
 import { AppConfig, dataPath, type RuntimeSettings } from "./config.ts";
 import { DiscordBot, enteredVoiceChannel } from "./discord/bot.ts";
@@ -76,7 +76,7 @@ import { createRecallHistoryTool } from "./tools/recall.ts";
 import { keepSilenceTool } from "./tools/silence.ts";
 import { createSkillTools } from "./tools/skills.ts";
 import { createTaskTools } from "./tools/tasks.ts";
-import { isSafePublicUrl } from "./tools/web.ts";
+import { createWebSearchTool, isSafePublicUrl } from "./tools/web.ts";
 import type { Tts, VoiceAudio } from "./tts/index.ts";
 import { createTts, fillerDirectory, loadFillers } from "./tts/index.ts";
 import { OpenAiTts } from "./tts/openai.ts";
@@ -630,12 +630,14 @@ test("config rejects incomplete settings instead of filling missing fields", () 
       ["stt", "qwen"],
       ["tts", "supertonic"],
       ["tts", "silero"],
+      ["tts", "voxcpm"],
       ["agent", "soul"],
       ["agent", "souls"],
       ["agent", "wake_words"],
       ["agent", "greet_on_join"],
       ["agent", "follow_up_window_ms"],
       ["agent", "local_control"],
+      ["agent", "web_search"],
     ] as const) {
       const document = JSON.parse(initial) as { defaults: Record<string, Record<string, unknown>> };
       const settings = document.defaults[section];
@@ -2412,6 +2414,116 @@ test("tool progress is optional and speaks at most once per request", async () =
       assert.deepEqual(spoken, withProgress ? ["Сравню варианты.", "Готово."] : ["Готово."]);
     }
   } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("DDGS web search maps HTTP results and reports provider failures", async (t) => {
+  const fetchMock = t.mock.method(globalThis, "fetch", async (input: URL, init: RequestInit) => {
+    assert.equal(input.toString(), "http://127.0.0.1:4479/search/text");
+    assert.deepEqual(JSON.parse(String(init.body)), { query: "Омск", max_results: 1, backend: "auto" });
+    return Response.json({ results: [{ title: "Омск", href: "https://example.org", body: "Город" }] });
+  });
+  const tool = createWebSearchTool("http://127.0.0.1:4479/");
+  const result = await tool.execute("test", { query: " Омск ", limit: 1 });
+  assert.deepEqual(result.details, {
+    query: "Омск",
+    results: [{ title: "Омск", url: "https://example.org", snippet: "Город" }],
+  });
+  fetchMock.mock.mockImplementation(async () =>
+    Response.json({ detail: "Search engines rate limited" }, { status: 429 }),
+  );
+  await assert.rejects(tool.execute("test", { query: "x" }), /HTTP 429: Search engines rate limited/u);
+  fetchMock.mock.mockImplementation(async () => Response.json({ results: [] }));
+  assert.deepEqual((await tool.execute("test", { query: "x" })).details, { query: "x", results: [] });
+  fetchMock.mock.mockImplementation(async () =>
+    Response.json({ detail: "Search failed: No results found." }, { status: 500 }),
+  );
+  const empty = await tool.execute("test", { query: "x" });
+  assert.deepEqual(empty.details, { query: "x", results: [] });
+  assert.deepEqual(empty.content, [{ type: "text", text: JSON.stringify({ query: "x", results: [] }) }]);
+  fetchMock.mock.mockImplementation(async () => Response.json({ detail: "Search failed: timed out" }, { status: 500 }));
+  await assert.rejects(tool.execute("test", { query: "x" }), /HTTP 500: Search failed: timed out/u);
+  fetchMock.mock.mockImplementation(async () => Response.json({ results: [{ unexpected: "value" }] }));
+  await assert.rejects(tool.execute("test", { query: "x" }), /Invalid DDGS search results/u);
+  fetchMock.mock.mockImplementation(async () => Response.json({ unexpected: [] }));
+  await assert.rejects(tool.execute("test", { query: "x" }), /Invalid DDGS search response/u);
+  fetchMock.mock.mockImplementation(async () => {
+    throw new TypeError("fetch failed");
+  });
+  await assert.rejects(tool.execute("test", { query: "x" }), /Check mise run search:health/u);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(tool.execute("test", { query: "x" }, controller.signal), /Web search cancelled/u);
+});
+
+test("VoxCPM sends named voice settings, decodes WAV, isolates fillers and handles failure/cancellation", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-voxcpm-"));
+  const previousFetch = globalThis.fetch;
+  try {
+    const initial = new AppConfig(directory, { discordToken: "test" });
+    const document = JSON.parse(readFileSync(initial.file, "utf8")) as { defaults: RuntimeSettings };
+    document.defaults.tts.backend = "voxcpm";
+    document.defaults.tts.voxcpm.voice = "Koshkodevochka";
+    writeFileSync(initial.file, JSON.stringify(document));
+    const config = new AppConfig(directory, { discordToken: "test", qwenTtsAuthorization: "Bearer private" });
+    const tts = await createTts(config);
+    const fillerDir = fillerDirectory(config);
+    assert.ok(fillerDir.includes(join("voxcpm", "voxcpm2", "Koshkodevochka")));
+    mkdirSync(fillerDir, { recursive: true });
+    writeFileSync(join(fillerDir, "test.wav"), floatMonoToWav(new Float32Array(240), 24_000));
+    assert.equal(loadFillers(config)()[0].samples.length, 240);
+    globalThis.fetch = (async (url, init) => {
+      assert.equal(url, "http://192.168.88.21:8000/v1/audio/speech");
+      assert.equal(new Headers(init?.headers).get("Authorization"), null);
+      assert.deepEqual(JSON.parse(String(init?.body)), {
+        model: "voxcpm2",
+        input: "Привет!",
+        voice: "Koshkodevochka",
+        stream: false,
+        response_format: "wav",
+      });
+      return new Response(new Uint8Array(floatMonoToWav(new Float32Array(2_400).fill(0.25), 24_000)));
+    }) as typeof fetch;
+    const audio = tts.synthesize("Привет!");
+    const chunks: Buffer[] = [];
+    for await (const chunk of audio.stream) chunks.push(Buffer.from(chunk));
+    assert.equal(await audio.done, 0.1);
+    assert.equal(Buffer.concat(chunks).length, 4_800 * 4);
+    assert.ok(stereoPcmToMono(Buffer.concat(chunks)).some((value) => value > 0.2));
+    globalThis.fetch = (async () => new Response("failure", { status: 503 })) as typeof fetch;
+    await assert.rejects(tts.synthesize("Привет!").done, /HTTP 503 failure/u);
+    globalThis.fetch = (async () => new Response("invalid")) as typeof fetch;
+    await assert.rejects(tts.synthesize("Привет!").done, /invalid WAV/u);
+    const truncated = floatMonoToWav(new Float32Array(240), 24_000).subarray(0, 45);
+    globalThis.fetch = (async () => new Response(new Uint8Array(truncated))) as typeof fetch;
+    await assert.rejects(tts.synthesize("Привет!").done, /truncated/u);
+    let signal: AbortSignal | null | undefined;
+    globalThis.fetch = ((_url, init) => {
+      signal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal?.reason), { once: true });
+      });
+    }) as typeof fetch;
+    const cancelled = tts.synthesize("Привет!");
+    cancelled.cancel();
+    assert.equal(await cancelled.done, 0);
+    assert.equal(signal?.aborted, true);
+    document.defaults.tts.voxcpm.voice = "another-voice";
+    document.defaults.tts.voxcpm.timeout_ms = 20;
+    writeFileSync(initial.file, JSON.stringify(document));
+    const otherVoice = new AppConfig(directory, { discordToken: "test" });
+    assert.notEqual(fillerDirectory(otherVoice), fillerDir);
+    const timeoutTts = await createTts(otherVoice);
+    // Keep the event loop alive while the provider's unref'ed timeout fires.
+    const keepAlive = setInterval(() => undefined, 100);
+    try {
+      await assert.rejects(timeoutTts.synthesize("Привет!").done, /generation timeout/u);
+    } finally {
+      clearInterval(keepAlive);
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
     rmSync(directory, { recursive: true, force: true });
   }
 });

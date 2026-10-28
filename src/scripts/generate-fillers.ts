@@ -21,7 +21,7 @@ const FILLERS = [
 async function run(): Promise<void> {
   const config = loadConfig();
   const { tts } = config.settings;
-  if (tts.backend !== "piper") {
+  if (tts.backend !== "piper" && tts.backend !== "voxcpm") {
     const voices = tts[tts.backend].voices;
     for (const voice of voices) {
       await generate(await createTts(config, voice), fillerDirectory(config, voice));

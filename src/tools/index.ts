@@ -17,7 +17,7 @@ import { keepSilenceTool } from "./silence.ts";
 import { createSkillTools } from "./skills.ts";
 import { createTaskTools } from "./tasks.ts";
 import { textResult } from "./types.ts";
-import { webFetchTool, webSearchTool } from "./web.ts";
+import { createWebSearchTool, webFetchTool } from "./web.ts";
 
 export { isSafePublicUrl } from "./web.ts";
 
@@ -33,7 +33,7 @@ export function createTools(
 ): AgentTool[] {
   return [
     currentDateTimeTool,
-    webSearchTool,
+    createWebSearchTool(config.settings.agent.web_search.base_url),
     webFetchTool,
     createRecallHistoryTool(history, config.settings.agent.timezone),
     createRememberTool(memory, history),
