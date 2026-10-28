@@ -1,58 +1,12 @@
-import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { errorMessage, formatMessageTime, isRecord, log } from "../common.ts";
+import { errorMessage, isRecord, log } from "../common.ts";
 
-export type MemoryKind = "person" | "topic" | "story" | "moment" | "activity" | "summary";
-
-interface MemoryEntryBase {
-  id: string;
+export interface MemoryEntry {
+  fact: string;
+  speaker: string;
   timestamp: string;
-  date: string;
-  time: string;
-  fact: string;
-  speaker: string;
-  evidence: string;
-  source_timestamp: string;
-  title?: string;
-  started_at?: string;
-  ended_at?: string;
-}
-
-export interface UserMemoryEntry extends MemoryEntryBase {
-  origin: "user";
-}
-
-export interface ReflectionMemoryEntry extends MemoryEntryBase {
-  origin: "sleep";
-  kind: MemoryKind;
-  subject_ids: string[];
-  importance: number;
-  evidence_refs: MemoryEvidence[];
-  reflection_day: string;
-}
-
-export type MemoryEntry = UserMemoryEntry | ReflectionMemoryEntry;
-
-export interface MemoryEvidence {
-  source_timestamp: string;
-  speaker_id: string;
-  speaker: string;
-  quote: string;
-  quoteReworded?: boolean;
-}
-
-export interface ReflectionMemoryInput {
-  kind: MemoryKind;
-  fact: string;
-  subjects: Array<{ id: string; name: string }>;
-  importance: number;
-  evidence: MemoryEvidence[];
-  day: string;
-  title?: string;
-  started_at?: string;
-  ended_at?: string;
 }
 
 export class MemoryStore {
@@ -67,9 +21,11 @@ export class MemoryStore {
     for (const [index, line] of readFileSync(path, "utf8").split("\n").entries()) {
       if (!line.trim()) continue;
       try {
-        const entry: unknown = JSON.parse(line);
-        if (!isMemoryEntry(entry)) throw new Error("invalid entry shape");
-        this.entries.push(entry);
+        const value: unknown = JSON.parse(line);
+        // Old automatic reflections must never become explicit user notes.
+        if (isRecord(value) && value["origin"] === "sleep") continue;
+        if (!isMemoryEntry(value)) throw new Error("invalid entry shape");
+        this.entries.push({ fact: value.fact, speaker: value.speaker, timestamp: value.timestamp });
       } catch (error) {
         log("error", "invalid memory entry skipped", { line: index + 1, error: errorMessage(error) });
       }
@@ -77,74 +33,16 @@ export class MemoryStore {
     log("info", "memory loaded", { file: path, entries: this.entries.length });
   }
 
-  remember(fact: string, speaker: string, evidence: string, sourceTimestamp: string): MemoryEntry {
+  remember(fact: string, speaker: string): MemoryEntry {
+    if (!fact.trim() || fact.trim().length > 500 || !speaker.trim()) throw new Error("invalid memory note");
     const existing = this.entries.find(
       (entry) => normalized(entry.speaker) === normalized(speaker) && normalized(entry.fact) === normalized(fact),
     );
     if (existing) return existing;
-    const now = new Date();
-    const entry: UserMemoryEntry = {
-      origin: "user",
-      id: randomUUID(),
-      timestamp: now.toISOString(),
-      date: localDate(now),
-      time: formatMessageTime(now),
-      fact: fact.trim(),
-      speaker,
-      evidence: evidence.trim(),
-      source_timestamp: sourceTimestamp,
-    };
-    this.append(entry);
-    return entry;
-  }
-
-  rememberReflection(input: ReflectionMemoryInput): MemoryEntry {
-    const fact = input.fact.trim();
-    const primary = input.evidence[0];
-    if (!fact || !input.subjects.length || !primary || ![3, 4, 5].includes(input.importance)) {
-      throw new Error("invalid reflection memory");
-    }
-    const subjects = [...input.subjects].sort((left, right) => left.id.localeCompare(right.id));
-    const subjectKey = subjects.map((subject) => subject.id).join("\n");
-    const speaker = subjects.map((subject) => subject.name).join(", ");
-    const existing = this.entries.find(
-      (entry) =>
-        entry.origin === "sleep" &&
-        normalized(entry.fact) === normalized(fact) &&
-        entry.kind === input.kind &&
-        (input.kind !== "activity" || (entry.started_at === input.started_at && entry.ended_at === input.ended_at)) &&
-        (input.kind !== "summary" || entry.reflection_day === input.day) &&
-        [...entry.subject_ids].sort().join("\n") === subjectKey,
-    );
-    if (existing) return existing;
-    const now = new Date();
-    const entry: MemoryEntry = {
-      id: randomUUID(),
-      timestamp: now.toISOString(),
-      date: localDate(now),
-      time: formatMessageTime(now),
-      fact,
-      speaker,
-      evidence: primary.quote,
-      source_timestamp: primary.source_timestamp,
-      kind: input.kind,
-      origin: "sleep",
-      subject_ids: subjects.map((subject) => subject.id),
-      importance: input.importance,
-      evidence_refs: input.evidence,
-      reflection_day: input.day,
-      ...(input.title ? { title: input.title } : {}),
-      ...(input.started_at ? { started_at: input.started_at } : {}),
-      ...(input.ended_at ? { ended_at: input.ended_at } : {}),
-    };
-    this.append(entry);
-    return entry;
-  }
-
-  private append(entry: MemoryEntry): void {
-    // ponytail: append-only is sufficient for one bot process; add a file lock before multi-process writers.
+    const entry: MemoryEntry = { fact: fact.trim(), speaker: speaker.trim(), timestamp: new Date().toISOString() };
     appendFileSync(this.path, `${JSON.stringify(entry)}\n`);
     this.entries.push(entry);
+    return entry;
   }
 }
 
@@ -155,44 +53,12 @@ export function normalized(value: string): string {
 function isMemoryEntry(value: unknown): value is MemoryEntry {
   return (
     isRecord(value) &&
-    typeof value["id"] === "string" &&
-    typeof value["timestamp"] === "string" &&
-    typeof value["date"] === "string" &&
-    typeof value["time"] === "string" &&
+    (value["origin"] === undefined || value["origin"] === "user") &&
     typeof value["fact"] === "string" &&
+    value["fact"].trim().length > 0 &&
     typeof value["speaker"] === "string" &&
-    typeof value["evidence"] === "string" &&
-    typeof value["source_timestamp"] === "string" &&
-    (value["origin"] === "user" ||
-      (value["origin"] === "sleep" &&
-        typeof value["kind"] === "string" &&
-        ["person", "topic", "story", "moment", "activity", "summary"].includes(value["kind"]) &&
-        Array.isArray(value["subject_ids"]) &&
-        value["subject_ids"].every((item) => typeof item === "string") &&
-        typeof value["importance"] === "number" &&
-        [3, 4, 5].includes(value["importance"]) &&
-        Array.isArray(value["evidence_refs"]) &&
-        value["evidence_refs"].every(isMemoryEvidence) &&
-        typeof value["reflection_day"] === "string")) &&
-    (value["title"] === undefined || typeof value["title"] === "string") &&
-    (value["started_at"] === undefined || typeof value["started_at"] === "string") &&
-    (value["ended_at"] === undefined || typeof value["ended_at"] === "string")
+    value["speaker"].trim().length > 0 &&
+    typeof value["timestamp"] === "string" &&
+    Number.isFinite(Date.parse(value["timestamp"]))
   );
-}
-
-function isMemoryEvidence(value: unknown): value is MemoryEvidence {
-  return (
-    isRecord(value) &&
-    typeof value["source_timestamp"] === "string" &&
-    typeof value["speaker_id"] === "string" &&
-    typeof value["speaker"] === "string" &&
-    typeof value["quote"] === "string" &&
-    (value["quoteReworded"] === undefined || typeof value["quoteReworded"] === "boolean")
-  );
-}
-
-function localDate(date: Date): string {
-  return [date.getFullYear(), date.getMonth() + 1, date.getDate()]
-    .map((part, index) => String(part).padStart(index === 0 ? 4 : 2, "0"))
-    .join("-");
 }

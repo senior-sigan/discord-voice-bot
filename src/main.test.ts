@@ -53,14 +53,7 @@ import {
   sortMemeRecordsChronologically,
 } from "./scripts/export-memes.ts";
 import { readMemeDocuments } from "./scripts/index-memes.ts";
-import {
-  chunkTranscripts,
-  hourlyChunks,
-  requestedDays,
-  structuredMemoryPayload,
-  validateProfileProposal,
-  validateProposals,
-} from "./scripts/sleep.ts";
+import { chunkTranscripts, requestedDays, validateProfileProposal } from "./scripts/sleep.ts";
 import { SearchStore } from "./search/index.ts";
 import { createTranscriber } from "./stt/index.ts";
 import { QwenHttpTranscriber } from "./stt/qwen-http.ts";
@@ -1259,108 +1252,6 @@ test("voice join detection ignores mute changes and recognizes channel entry", (
   assert.equal(enteredVoiceChannel("master", null, "master"), false);
 });
 
-test("sleep memories require exact user-authored evidence", () => {
-  const sources = [
-    {
-      timestamp: "2026-08-26T10:00:00.000Z",
-      date: "2026-08-26",
-      time: "16:00:00",
-      kind: "transcript" as const,
-      speaker: "Илья",
-      speaker_id: "1",
-      text: "Я решил в сентябре поехать на Байкал",
-    },
-    {
-      timestamp: "2026-08-26T10:01:00.000Z",
-      date: "2026-08-26",
-      time: "17:01:00",
-      kind: "transcript" as const,
-      speaker: "Саша",
-      speaker_id: "2",
-      text: "Давайте выберем билеты в субботу",
-    },
-  ] satisfies [HistoryEntry, HistoryEntry];
-  const result = validateProposals(
-    {
-      memories: [
-        {
-          kind: "person",
-          summary: "Илья планирует в сентябре поехать на Байкал.",
-          subject_ids: ["1"],
-          importance: 5,
-          evidence: [{ source_timestamp: sources[0].timestamp, quote: "в сентябре поехать на Байкал" }],
-        },
-        {
-          kind: "person",
-          summary: "Илья собирается выбирать билеты в субботу.",
-          subject_ids: ["1"],
-          importance: 4,
-          evidence: [{ source_timestamp: sources[1].timestamp, quote: "выберем билеты в субботу" }],
-        },
-        {
-          kind: "story",
-          summary: "Участники договорились вернуться к билетам в субботу.",
-          subject_ids: ["1", "2"],
-          importance: 4,
-          evidence: [{ source_timestamp: sources[1].timestamp, quote: "выберем билеты в субботу" }],
-        },
-        {
-          kind: "activity",
-          title: "Планировали поездку",
-          summary: "Илья и Саша обсуждали поездку и выбор билетов.",
-          subject_ids: ["1", "2"],
-          importance: 3,
-          started_at: sources[0].timestamp,
-          ended_at: sources[1].timestamp,
-          evidence: [
-            { source_timestamp: sources[0].timestamp, quote: "поехать на Байкал" },
-            { source_timestamp: sources[1].timestamp, quote: "выберем билеты" },
-          ],
-        },
-      ],
-    },
-    sources,
-    "2026-08-26",
-  );
-
-  assert.equal(result.accepted.length, 3);
-  assert.equal(result.rejected.length, 1);
-  assert.deepEqual(result.accepted[0]?.subjects, [{ id: "1", name: "Илья" }]);
-  assert.match(result.rejected[0] ?? "", /not self-authored/u);
-  assert.deepEqual(requestedDays(sources, "all"), ["2026-08-26"]);
-  assert.equal(chunkTranscripts(sources, 100).length, 2);
-  assert.equal(hourlyChunks(sources, 10_000).length, 2);
-});
-
-test("sleep keeps an STT-corrected quote and marks it as reworded", () => {
-  const source = {
-    timestamp: "2026-08-26T10:00:00.000Z",
-    date: "2026-08-26",
-    time: "16:00:00",
-    kind: "transcript" as const,
-    speaker: "Илья",
-    speaker_id: "1",
-    text: "Я в сентябре поеду на Бакал",
-  } satisfies HistoryEntry;
-  const result = validateProposals(
-    {
-      memories: [
-        {
-          kind: "person",
-          summary: "Илья планирует в сентябре поехать на Байкал.",
-          subject_ids: ["1"],
-          importance: 4,
-          evidence: [{ source_timestamp: source.timestamp, quote: "В сентябре поеду на Байкал" }],
-        },
-      ],
-    },
-    [source],
-    "2026-08-26",
-  );
-  assert.equal(result.rejected.length, 0);
-  assert.equal(result.accepted[0]?.evidence[0]?.quoteReworded, true);
-});
-
 test("person profiles are structured, updated in place and hide raw evidence from the agent", async () => {
   const directory = mkdtempSync(join(tmpdir(), "voice-agent-profiles-"));
   const sources = [
@@ -1392,6 +1283,8 @@ test("person profiles are structured, updated in place and hide raw evidence fro
       text: "Зовите меня Сиган. Сейчас работаю над голосовым агентом для Discord",
     },
   ] satisfies [HistoryEntry, HistoryEntry, HistoryEntry];
+  assert.deepEqual(requestedDays(sources, "all"), ["2026-08-25", "2026-08-26", "2026-08-27"]);
+  assert.equal(chunkTranscripts(sources, 100).length, 3);
   try {
     const result = validateProfileProposal(
       {
@@ -1489,77 +1382,40 @@ test("person profiles are structured, updated in place and hide raw evidence fro
   }
 });
 
-test("sleep surfaces provider errors before retrying structured output", () => {
-  assert.throws(
-    () =>
-      structuredMemoryPayload({
-        content: [],
-        errorMessage: "Codex error: Unsupported parameter: temperature",
-        stopReason: "error",
-      }),
-    /Unsupported parameter: temperature/u,
-  );
-  assert.deepEqual(
-    structuredMemoryPayload({
-      content: [fauxToolCall("submit_memories", { memories: [] })],
-      stopReason: "toolUse",
-    }),
-    { memories: [] },
-  );
-});
-
-test("reflected memory persists metadata and deduplicates exact facts", () => {
-  const directory = mkdtempSync(join(tmpdir(), "voice-agent-reflection-"));
+test("memory loads only explicit notes and strips legacy metadata", () => {
+  const directory = mkdtempSync(join(tmpdir(), "voice-agent-memory-format-"));
   try {
     const path = join(directory, "memory.jsonl");
+    const note = { fact: "Андрей по средам на репетиции", speaker: "Илья", timestamp: "2026-09-02T18:22:10.799Z" };
+    const legacy = {
+      ...note,
+      origin: "user",
+      evidence: "Запомни про репетиции",
+      source_timestamp: note.timestamp,
+      id: "old",
+    };
+    writeFileSync(
+      path,
+      `${[
+        JSON.stringify(legacy),
+        JSON.stringify({ ...legacy, origin: "sleep", fact: "Обсуждали игры" }),
+        JSON.stringify({ ...note, timestamp: "invalid" }),
+        "broken JSON",
+      ].join("\n")}\n`,
+    );
     const store = new MemoryStore(path);
-    const evidence = {
-      source_timestamp: "2026-08-26T10:00:00.000Z",
-      speaker_id: "1",
-      speaker: "Илья",
-      quote: "Я решил в сентябре поехать на Байкал",
-    };
-    const input = {
-      kind: "person" as const,
-      fact: "Илья планирует в сентябре поехать на Байкал.",
-      subjects: [{ id: "1", name: "Илья" }],
-      importance: 5,
-      evidence: [evidence],
-      day: "2026-08-26",
-    };
-    store.rememberReflection(input);
-    store.rememberReflection(input);
-    store.rememberReflection({
-      ...input,
-      subjects: [{ id: "2", name: "Саша" }],
-      evidence: [{ ...evidence, speaker_id: "2", speaker: "Саша" }],
-    });
-    store.rememberReflection({
-      ...input,
-      kind: "activity",
-      title: "Планировали поездку",
-      fact: "Обсуждали поездку на Байкал.",
-      importance: 3,
-      started_at: evidence.source_timestamp,
-      ended_at: evidence.source_timestamp,
-    });
-
+    assert.deepEqual(store.entries, [note]);
+    assert.deepEqual(store.remember(" Андрей по средам на репетиции ", "Илья"), note);
+    store.remember("Погоду смотреть для Омска", "Илья");
     const reloaded = new MemoryStore(path);
-    assert.equal(reloaded.entries.length, 3);
-    assert.equal(reloaded.entries[0]?.origin, "sleep");
-    const first = reloaded.entries[0];
-    assert.ok(first?.origin === "sleep");
-    assert.equal(first.kind, "person");
-    assert.deepEqual(first.subject_ids, ["1"]);
-    assert.equal(reloaded.entries[0]?.origin, "sleep");
-    assert.equal(reloaded.entries[2]?.title, "Планировали поездку");
-    assert.equal(reloaded.entries[2]?.started_at, evidence.source_timestamp);
-    for (const key of ["origin", "kind", "subject_ids", "importance", "evidence_refs", "reflection_day"]) {
-      const incomplete: Record<string, unknown> = { ...first };
-      delete incomplete[key];
-      writeFileSync(path, JSON.stringify(incomplete));
-      assert.equal(new MemoryStore(path).entries.length, 0, key);
-    }
+    assert.equal(reloaded.entries.length, 2);
+    assert.deepEqual(Object.keys(reloaded.entries[1] ?? {}).sort(), ["fact", "speaker", "timestamp"]);
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(path, "utf8").trim().split("\n").at(-1) ?? "{}")).sort(), [
+      "fact",
+      "speaker",
+      "timestamp",
+    ]);
+    assert.throws(() => store.remember(" ", "Илья"), /invalid memory note/u);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -1618,7 +1474,7 @@ test("meme search uses indexed descriptions, natural dates, and returns sendable
   }
 });
 
-test("curated memory requires user evidence, persists, and supports fuzzy search", async () => {
+test("explicit memory stays compact, rejects unsolicited writes, and supports fuzzy search", async () => {
   const directory = mkdtempSync(join(tmpdir(), "voice-agent-memory-"));
   const historyPath = join(directory, "history.jsonl");
   const memoryPath = join(directory, "memory.jsonl");
@@ -1663,10 +1519,25 @@ test("curated memory requires user evidence, persists, and supports fuzzy search
       query: "кофе без сахар",
     });
     assert.equal((recalled.details as { count: number }).count, 1);
-    assert.equal(
-      (recalled.details as { results: Array<{ evidence: string }> }).results[0]?.evidence,
-      "я люблю кофе без сахара",
-    );
+    assert.deepEqual((recalled.details as { results: unknown[] }).results, reloaded.entries);
+    assert.deepEqual(Object.keys(reloaded.entries[0] ?? {}).sort(), ["fact", "speaker", "timestamp"]);
+    assert.doesNotMatch(readFileSync(memoryPath, "utf8"), /evidence|source_quote|origin|source_timestamp/u);
+    for (const text of [
+      "Олег, помнишь, я люблю чай?",
+      "Олег, не запоминай: я люблю чай",
+      "Я запомнил, что я люблю чай",
+      "Олег, сохрани документ про чай",
+    ]) {
+      history.appendTranscript("Илья", text);
+      await assert.rejects(
+        remember.execute("unsolicited", { fact: "Илья любит чай", source_quote: text }),
+        /did not explicitly ask/u,
+      );
+    }
+    const aboutOleg = await createSearchMemoryTool(reloaded).execute("search-wording", {
+      query: "Олег говорил кофе без сахара",
+    });
+    assert.equal((aboutOleg.details as { count: number }).count, 1);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

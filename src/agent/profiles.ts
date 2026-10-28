@@ -2,7 +2,6 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname } from "node:path";
 
 import { errorMessage, isRecord, log } from "../common.ts";
-import type { MemoryEvidence } from "./memory.ts";
 
 export const PROFILE_SECTIONS = [
   "games",
@@ -17,11 +16,19 @@ export const PROFILE_SECTIONS = [
 export type ProfileSection = (typeof PROFILE_SECTIONS)[number];
 export type ProfileStatus = "current" | "recurring" | "past" | "uncertain";
 
+export interface ProfileEvidence {
+  source_timestamp: string;
+  speaker_id: string;
+  speaker: string;
+  quote: string;
+  quoteReworded?: boolean;
+}
+
 export interface ProfileClaim {
   summary: string;
   status: ProfileStatus;
   last_seen_at: string;
-  evidence: MemoryEvidence[];
+  evidence: ProfileEvidence[];
 }
 
 export type ProfileSections = Record<ProfileSection, ProfileClaim[]>;
@@ -127,11 +134,11 @@ function isProfileClaim(value: unknown): value is ProfileClaim {
     typeof value["last_seen_at"] === "string" &&
     Array.isArray(value["evidence"]) &&
     value["evidence"].length > 0 &&
-    value["evidence"].every(isMemoryEvidence)
+    value["evidence"].every(isProfileEvidence)
   );
 }
 
-function isMemoryEvidence(value: unknown): value is MemoryEvidence {
+function isProfileEvidence(value: unknown): value is ProfileEvidence {
   return (
     isRecord(value) &&
     typeof value["source_timestamp"] === "string" &&

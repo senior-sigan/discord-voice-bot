@@ -9,11 +9,15 @@ import { textResult } from "./types.ts";
 
 const rememberParameters = Type.Object(
   {
-    fact: Type.String({ minLength: 3, maxLength: 500, description: "Краткий устойчивый факт или предпочтение" }),
+    fact: Type.String({
+      minLength: 3,
+      maxLength: 500,
+      description: "Краткая заметка: только то, что попросили запомнить",
+    }),
     source_quote: Type.String({
       minLength: 5,
       maxLength: 1_000,
-      description: "Дословная цитата из пользовательской реплики, подтверждающая факт",
+      description: "Цитата из просьбы запомнить; нужна только для проверки, в память не сохраняется",
     }),
     speaker: Type.Optional(Type.String({ minLength: 1, maxLength: 100, description: "Имя участника" })),
   },
@@ -33,9 +37,9 @@ const searchParameters = Type.Object(
 export function createRememberTool(memory: MemoryStore, history: HistoryStore): AgentTool<typeof rememberParameters> {
   return {
     name: "remember",
-    label: "Запомнить факт",
+    label: "Сохранить заметку",
     description:
-      "Сохраняет устойчивый факт, предпочтение или договорённость только когда пользователь явно просит запомнить. source_quote должна быть дословной цитатой пользовательской реплики.",
+      "Сохраняет компактную заметку только по явной просьбе пользователя запомнить. Не извлекай факты из обычного разговора. Передай только запрошенную информацию, без вводных слов и дублирования цитаты. source_quote проверяется по истории и не сохраняется.",
     parameters: rememberParameters,
     async execute(_toolCallId, args) {
       const fact = args.fact.trim();
@@ -52,11 +56,16 @@ export function createRememberTool(memory: MemoryStore, history: HistoryStore): 
             normalized(entry.text).includes(quote),
         );
       if (!source) throw new Error("source_quote was not found in a user transcript");
-      if (!/(?:запомни|запомнить|помни|учти\s+на\s+будущее)/iu.test(source.text)) {
+      if (
+        !/(?<![\p{L}\p{N}_])(?:запомни(?:те)?|сохрани(?:те)?\s+(?:это\s+)?в\s+памят[ьи]|учти\s+на\s+будущее)(?![\p{L}\p{N}_])/iu.test(
+          source.text,
+        ) ||
+        /(?<![\p{L}\p{N}_])не\s+(?:надо\s+|нужно\s+)?(?:запомин|запом|сохран)/iu.test(source.text)
+      ) {
         throw new Error("the user did not explicitly ask to remember this fact");
       }
       const before = memory.entries.length;
-      const entry = memory.remember(fact, source.speaker, evidence, source.timestamp);
+      const entry = memory.remember(fact, source.speaker);
       return textResult({ saved: memory.entries.length > before, entry });
     },
   };
@@ -67,7 +76,7 @@ export function createSearchMemoryTool(memory: MemoryStore, timezone?: string): 
     name: "search_memory",
     label: "Поиск в памяти",
     description:
-      "Ищет fuzzy-поиском намеренно сохранённые факты, предпочтения и договорённости. Это не поиск по полному журналу разговора.",
+      "Быстро ищет по заметкам, которые пользователи явно просили запомнить. Поддерживает неточные формулировки. Возвращает только заметку, автора и время сохранения. Для полного разговора используй recall_history.",
     parameters: searchParameters,
     async execute(_toolCallId, args) {
       const projections = memory.entries.map((entry) => ({ entry, history: memoryProjection(entry) }));
@@ -76,6 +85,7 @@ export function createSearchMemoryTool(memory: MemoryStore, timezone?: string): 
         projections.map(({ history }) => history),
         {
           query: args.query,
+          kind: "transcript",
           ...(args.speaker ? { speaker: args.speaker } : {}),
           ...(args.date ? { date: args.date } : {}),
           limit: args.limit ?? 5,
@@ -94,10 +104,10 @@ export function createSearchMemoryTool(memory: MemoryStore, timezone?: string): 
 function memoryProjection(entry: MemoryEntry): HistoryEntry {
   return {
     timestamp: entry.timestamp,
-    date: entry.date,
-    time: entry.time,
+    date: entry.timestamp.slice(0, 10),
+    time: entry.timestamp.slice(11, 19),
     kind: "transcript",
     speaker: entry.speaker,
-    text: `${entry.title ?? ""} ${entry.fact} ${entry.evidence}`,
+    text: entry.fact,
   };
 }
